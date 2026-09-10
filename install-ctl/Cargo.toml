@@ -1,0 +1,26 @@
+[package]
+name = "install-ctl"
+version = "0.1.0"
+edition = "2024"
+description = "Artifact installer — reads install/artifacts.toml at runtime to list and install workflow-tools artifacts"
+
+[[bin]]
+name = "install-ctl"
+path = "src/main.rs"
+
+[dependencies]
+audit-api  = { path = "../../audit/crates/audit-api" }
+clap       = { version = "4", features = ["derive"] }
+dirs       = "5"
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2       = "0.10"
+sysinfo    = "0.32"
+tempfile   = "3"
+toml       = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }
+
+[dev-dependencies]
+

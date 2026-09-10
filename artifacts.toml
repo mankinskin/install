@@ -1,0 +1,288 @@
+# Runtime-read artifact/hook/command registry for install-ctl (schema v1, see
+# spec 97322185-2bda-4f25-85f7-f975a0b3fbad). No Rust recompile needed to
+# add/remove an entry here — install-ctl reads this file at process start.
+#
+# The committed root COMMANDS.md is the deterministic `render_catalog`
+# projection of this file; regenerate it whenever this file changes.
+
+version = 1
+
+[[artifact]]
+id = "install-ctl"
+category = "cli"
+kind = "rust-binary"
+source_path = "install/install-ctl"
+owner = "workflow-tools"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "install-ctl"
+
+[[artifact]]
+id = "mcp-toolmon"
+category = "mcp"
+kind = "rust-binary"
+source_path = "session/crates/mcp-toolmon"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "mcp-toolmon"
+
+[[artifact]]
+id = "session-capture-hook"
+category = "misc"
+kind = "rust-binary"
+source_path = "session"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "session-capture-hook"
+features = ["capture-hook"]
+
+[[artifact]]
+id = "session-record-merge"
+category = "misc"
+kind = "rust-binary"
+source_path = "session/crates/session-record-merge"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "session-record-merge"
+
+[[artifact]]
+id = "ticket"
+category = "cli"
+kind = "rust-binary"
+source_path = "ticket"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "ticket"
+features = ["cli"]
+
+[[artifact]]
+id = "ticket-record-merge"
+category = "misc"
+kind = "rust-binary"
+source_path = "ticket"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "ticket-record-merge"
+
+[[artifact]]
+id = "spec-cli"
+category = "cli"
+kind = "rust-binary"
+source_path = "spec"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "spec"
+features = ["cli"]
+
+[[artifact]]
+id = "audit-cli"
+category = "cli"
+kind = "rust-binary"
+source_path = "audit/crates/audit-cli"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "audit"
+
+[[artifact]]
+id = "rule-cli"
+category = "cli"
+kind = "rust-binary"
+source_path = "rule"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "rule"
+features = ["cli"]
+
+[[artifact]]
+id = "feedback-cli"
+category = "cli"
+kind = "rust-binary"
+source_path = "feedback/crates/feedback-cli"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "feedback"
+
+[[artifact]]
+id = "session-cli"
+category = "cli"
+kind = "rust-binary"
+source_path = "session"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "session"
+features = ["cli"]
+
+[[artifact]]
+id = "peek-cli"
+category = "cli"
+kind = "rust-binary"
+source_path = "peek/crates/peek-cli"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "peek"
+
+[[artifact]]
+id = "test-cli"
+category = "cli"
+kind = "rust-binary"
+source_path = "test/crates/test-cli"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "test"
+
+[[artifact]]
+id = "ticket-mcp"
+category = "mcp"
+kind = "rust-binary"
+source_path = "ticket"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "ticket-mcp"
+features = ["mcp"]
+
+[[artifact]]
+id = "spec-mcp"
+category = "mcp"
+kind = "rust-binary"
+source_path = "spec"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "spec-mcp"
+features = ["mcp"]
+
+[[artifact]]
+id = "test-mcp"
+category = "mcp"
+kind = "rust-binary"
+source_path = "test/crates/test-mcp"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "test-mcp"
+
+[[artifact]]
+id = "feedback-mcp"
+category = "mcp"
+kind = "rust-binary"
+source_path = "feedback/crates/feedback-mcp"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "feedback-mcp"
+
+[[artifact]]
+id = "session-mcp"
+category = "mcp"
+kind = "rust-binary"
+source_path = "session"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "session-mcp"
+features = ["mcp"]
+
+[[artifact]]
+id = "peek-mcp"
+category = "mcp"
+kind = "rust-binary"
+source_path = "peek/crates/peek-mcp"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "peek-mcp"
+
+[[artifact]]
+id = "rule-mcp"
+category = "mcp"
+kind = "rust-binary"
+source_path = "rule"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "rule-mcp"
+features = ["mcp"]
+
+[[artifact]]
+id = "audit-mcp"
+category = "mcp"
+kind = "rust-binary"
+source_path = "audit/crates/audit-mcp"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "audit-mcp"
+
+[[artifact]]
+id = "doc-viewer"
+category = "service"
+kind = "rust-binary"
+source_path = "doc/crates/doc-viewer"
+owner = "tooling"
+lifecycle = ["install", "start", "stop", "restart", "uninstall", "inspect"]
+safety = "approval-required"
+bin = "doc-viewer"
+
+[[artifact]]
+id = "log-viewer"
+category = "service"
+kind = "rust-binary"
+source_path = "log/crates/log-viewer"
+owner = "tooling"
+lifecycle = ["install", "start", "stop", "restart", "uninstall", "inspect"]
+safety = "approval-required"
+bin = "log-viewer"
+
+[[artifact]]
+id = "spec-viewer"
+category = "service"
+kind = "rust-binary"
+source_path = "spec/spec-viewer"
+owner = "tooling"
+lifecycle = ["install", "start", "stop", "restart", "uninstall", "inspect"]
+safety = "approval-required"
+bin = "spec-viewer"
+
+[[artifact]]
+id = "ticket-viewer"
+category = "service"
+kind = "rust-binary"
+source_path = "ticket/ticket-viewer"
+owner = "tooling"
+lifecycle = ["install", "start", "stop", "restart", "uninstall", "inspect"]
+safety = "approval-required"
+bin = "ticket-viewer"
+
+[[artifact]]
+id = "worktree-ctl"
+category = "misc"
+kind = "rust-binary"
+source_path = "session/crates/worktree-ctl"
+owner = "tooling"
+lifecycle = ["inspect"]
+safety = "safe"
+bin = "worktree-ctl"
+
+[[artifact]]
+id = "hook-copilot-capture"
+category = "hook"
+kind = "hook"
+source_path = "session"
+owner = "tooling"
+lifecycle = ["inspect"]
+safety = "safe"
+bin = "session-capture-hook --from-hook-stdin"
+

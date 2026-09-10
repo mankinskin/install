@@ -1,0 +1,127 @@
+version = 1
+
+[[fixture]]
+id = "direct-prompt-closure"
+category = "success"
+test = "direct_corpus_includes_markdown_closure"
+expected = "pass"
+assertions = ["requested root present", "transitive Markdown closure present", "no blocking diagnostic"]
+
+[[fixture]]
+id = "recipe-copy-corpus"
+category = "success"
+test = "recipe_copy_id_collision_from_different_sources_is_ambiguous_ownership"
+expected = "pass"
+assertions = ["recipe artifact produced", "typed profile input resolved", "no blocking diagnostic"]
+
+[[fixture]]
+id = "full-agents-surface"
+category = "success"
+test = "full_agents_surface_closure_installs_every_referenced_file"
+expected = "pass"
+assertions = ["AGENTS root selected", "four-artifact closure installed", "final references resolve"]
+
+[[fixture]]
+id = "missing-dependency"
+category = "blocking"
+test = "missing_dependency_is_a_blocking_diagnostic"
+expected = "blocked"
+assertions = ["missing target classified", "non-zero plan outcome", "destination unchanged"]
+
+[[fixture]]
+id = "relative-relocation"
+category = "success"
+test = "relocation_across_different_directories_rewrites_links"
+expected = "pass"
+assertions = ["target-relative link rewritten", "unrelated bytes preserved", "final link resolves"]
+
+[[fixture]]
+id = "existing-submodule"
+category = "topology"
+test = "existing_submodule_is_preferred_and_keeps_intra_submodule_links"
+expected = "pass"
+assertions = ["matching submodule selected", "intra-submodule placement", "relative link preserved"]
+
+[[fixture]]
+id = "absent-submodule-fallback"
+category = "topology"
+test = "missing_submodule_falls_back_to_canonical_path"
+expected = "pass"
+assertions = ["canonical path selected", "fallback rewrite emitted", "no write into absent submodule"]
+
+[[fixture]]
+id = "mismatched-submodule"
+category = "topology"
+test = "present_but_uninitialized_directory_is_not_treated_as_an_owning_submodule"
+expected = "pass"
+assertions = ["ownership not inferred from directory", "canonical fallback selected", "unrelated file preserved"]
+
+[[fixture]]
+id = "ambiguous-ownership"
+category = "blocking"
+test = "recipe_copy_step_produces_an_artifact"
+expected = "blocked"
+assertions = ["ambiguous ownership represented", "stable diagnostic", "no partial write"]
+
+[[fixture]]
+id = "duplicate-destination"
+category = "blocking"
+test = "distinct_sources_falling_back_to_the_same_canonical_path_is_duplicate_destination"
+expected = "blocked"
+assertions = ["duplicate final path detected", "stable diagnostic", "destination unchanged"]
+
+[[fixture]]
+id = "path-traversal"
+category = "security"
+test = "traversal_link_is_a_blocking_diagnostic"
+expected = "blocked"
+assertions = ["escape rejected", "unsafe path classified", "destination unchanged"]
+
+[[fixture]]
+id = "symlink-escape"
+category = "security"
+test = "symlink_escaping_the_source_root_is_a_blocking_diagnostic"
+expected = "blocked"
+assertions = ["real path checked", "symlink escape rejected", "destination unchanged"]
+
+[[fixture]]
+id = "dependency-cycle"
+category = "blocking"
+test = "dependency_cycle_is_a_blocking_diagnostic"
+expected = "blocked"
+assertions = ["cycle detected", "stable diagnostic", "no partial write"]
+
+[[fixture]]
+id = "unsupported-recipe"
+category = "blocking"
+test = "unsupported_recipe_step_is_a_blocking_diagnostic"
+expected = "blocked"
+assertions = ["unsupported step classified", "network not executed", "destination unchanged"]
+
+[[fixture]]
+id = "destination-scope-injection"
+category = "destination"
+test = "user_and_system_scopes_use_injected_roots"
+expected = "pass"
+assertions = ["user root injected", "system root injected", "host paths untouched"]
+
+[[fixture]]
+id = "idempotent-install"
+category = "success"
+test = "install_is_idempotent_and_preserves_unrelated_files"
+expected = "pass"
+assertions = ["second install is no-op", "unrelated file preserved", "tree stable"]
+
+[[fixture]]
+id = "non-guidance-audit"
+category = "audit"
+test = "blocks_links_to_non_guidance_local_targets"
+expected = "blocked"
+assertions = ["non-Guidance target classified", "blocking finding emitted", "remediation included"]
+
+[[fixture]]
+id = "autofix-stale-report"
+category = "autofix"
+test = "apply_refuses_stale_hash_with_zero_writes"
+expected = "blocked"
+assertions = ["source hash verified", "stale report refused", "zero writes"]
