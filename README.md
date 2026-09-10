@@ -181,7 +181,7 @@ installing all guidance from `meta-workspace` into an external consumer
 repository under its `.agents/` tree:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mankinskin/workflow-tools/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mankinskin/install/main/install.sh \
   | bash -s -- --root "$HOME/.local/workflow-tools" \
   && "$HOME/.local/workflow-tools/bin/install-ctl" \
        guidance get \
