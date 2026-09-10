@@ -5,7 +5,7 @@
 # consumer init is bootstrap.sh's job.
 set -euo pipefail
 
-WORKFLOW_TOOLS_REPOSITORY="${WORKFLOW_TOOLS_REPOSITORY:-https://github.com/mankinskin/workflow-tools}"
+WORKFLOW_TOOLS_REPOSITORY="${WORKFLOW_TOOLS_REPOSITORY:-https://github.com/mankinskin/install}"
 WORKFLOW_TOOLS_BRANCH="${WORKFLOW_TOOLS_BRANCH:-main}"
 WORKFLOW_TOOLS_REVISION="${WORKFLOW_TOOLS_REVISION:-}"
 

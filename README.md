@@ -219,7 +219,7 @@ start at `.agents/` instead:
 
 ```bash
 install-ctl guidance get \
-  https://github.com/mankinskin/workflow-tools.git \
+  https://github.com/mankinskin/install.git \
   --select .agents/agents/implement.agent.md \
   --select .agents/instructions/workflow/agent-world-model.instructions.md \
   --target "$PWD" \

@@ -9,7 +9,7 @@ name = "install-ctl"
 path = "src/main.rs"
 
 [dependencies]
-audit-api  = { path = "../../audit/crates/audit-api" }
+audit-api  = { git = "https://github.com/mankinskin/audit", branch = "main" }
 clap       = { version = "4", features = ["derive"] }
 dirs       = "5"
 serde      = { version = "1", features = ["derive"] }
