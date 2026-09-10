@@ -18,7 +18,7 @@ execs it with any trailing arguments. Defaults to the latest commit on branch 'm
 Pass --uninstall to remove install-ctl from <install-root>/bin.
 
 Example:
-  curl -fsSL https://raw.githubusercontent.com/mankinskin/workflow-tools/main/install.sh \
+  curl -fsSL https://raw.githubusercontent.com/mankinskin/install/main/install.sh \
     | bash -s -- --root "$HOME/.local/workflow-tools"
 EOF
 }
