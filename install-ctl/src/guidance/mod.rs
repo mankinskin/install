@@ -257,9 +257,29 @@ fn run_get(
         let plan = build_plan_with_profile(profile, &inputs)?;
         print_plan(&plan, args.json);
         if plan.is_blocking() {
+            let blocking: Vec<_> = plan
+                .diagnostics
+                .iter()
+                .filter(|d| {
+                    matches!(
+                        d.code,
+                        graph::DiagnosticCode::MissingDependency
+                            | graph::DiagnosticCode::DuplicateDestination
+                            | graph::DiagnosticCode::AmbiguousOwnership
+                            | graph::DiagnosticCode::PathTraversal
+                            | graph::DiagnosticCode::AbsoluteSourcePath
+                            | graph::DiagnosticCode::SymlinkEscape
+                            | graph::DiagnosticCode::UnsupportedRecipeStep
+                            | graph::DiagnosticCode::UnsafeTarget
+                    )
+                })
+                .collect();
+            for b in &blocking {
+                eprintln!("BLOCKING: [{:?}] {}", b.code, b.message);
+            }
             return Err(format!(
                 "plan has {} blocking diagnostic(s); see above",
-                plan.diagnostics.len()
+                blocking.len()
             ));
         }
 

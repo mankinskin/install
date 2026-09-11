@@ -49,6 +49,17 @@ fi
 
 echo "[docker-validation] OK: $record_count ticket record(s) read back from consumer store"
 
+echo "[docker-validation] testing guidance get for full meta-workspace guidance"
+"$install_root/bin/install-ctl" guidance get \
+    https://github.com/mankinskin/meta-workspace.git \
+    --select workflow-tools/.agents \
+    --select .agents \
+    --select AGENTS.md \
+    --target "$consumer_dir" \
+    --destination-scope repo
+test -d "$consumer_dir/.agents" \
+    || { echo "[docker-validation] FAIL: .agents directory not created by guidance get" >&2; exit 1; }
+
 echo "[docker-validation] testing install.sh --uninstall"
 bash /workflow-tools/install.sh --root "$install_root" --uninstall
 if [[ -f "$install_root/bin/install-ctl" ]]; then

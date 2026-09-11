@@ -23,10 +23,10 @@ assertions = ["AGENTS root selected", "four-artifact closure installed", "final 
 
 [[fixture]]
 id = "missing-dependency"
-category = "blocking"
-test = "missing_dependency_is_a_blocking_diagnostic"
-expected = "blocked"
-assertions = ["missing target classified", "non-zero plan outcome", "destination unchanged"]
+category = "success"
+test = "missing_dependency_is_a_reported_diagnostic"
+expected = "pass"
+assertions = ["missing target classified", "transitive closure installed"]
 
 [[fixture]]
 id = "relative-relocation"
@@ -86,10 +86,10 @@ assertions = ["real path checked", "symlink escape rejected", "destination uncha
 
 [[fixture]]
 id = "dependency-cycle"
-category = "blocking"
-test = "dependency_cycle_is_a_blocking_diagnostic"
-expected = "blocked"
-assertions = ["cycle detected", "stable diagnostic", "no partial write"]
+category = "success"
+test = "dependency_cycle_is_a_reported_diagnostic"
+expected = "pass"
+assertions = ["cycle detected", "stable diagnostic", "transitive closure installed"]
 
 [[fixture]]
 id = "unsupported-recipe"

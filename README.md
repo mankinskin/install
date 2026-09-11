@@ -186,18 +186,20 @@ curl -fsSL https://raw.githubusercontent.com/mankinskin/install/main/install.sh 
   && "$HOME/.local/workflow-tools/bin/install-ctl" \
        guidance get \
        https://github.com/mankinskin/meta-workspace.git \
-       --select context-engine/AGENTS.md \
-       --select .agents/agents/implement.agent.md \
-       --select workflow-tools/.agents/agents/orchestrator.agent.md \
-       --select workflow-tools/.agents/prompts/iteration.prompt.md \
+       --select workflow-tools/.agents \
+       --select .agents \
+       --select AGENTS.md \
        --target "$PWD" \
        --destination-scope repo
 ```
 
 The command installs `install-ctl` and runs `guidance get`, which shallow-clones
-`meta-workspace`, computes the full transitive Markdown closure of all referenced
-instructions, agents, and prompts, installs all guidance files into `$PWD/.agents/`,
-and automatically cleans up the temporary clone.
+`meta-workspace` (including its submodules), computes the full transitive Markdown
+closure of all referenced instructions, agents, and prompts across `.agents`,
+`workflow-tools/.agents`, and `AGENTS.md` (resolved to `context-engine/AGENTS.md`),
+installs all guidance files into `$PWD/.agents/`, and automatically cleans up the
+temporary clone. This exact flow is also exercised during containerized end-to-end
+validation (`docker-validation/run-in-container.sh`).
 
 ### Install specific selected agents or guidance files
 

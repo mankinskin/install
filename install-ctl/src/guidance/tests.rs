@@ -192,7 +192,7 @@ fn unsupported_recipe_step_is_a_blocking_diagnostic() {
 // -- rejection cases (AC4, AC10) ----------------------------------------------
 
 #[test]
-fn missing_dependency_is_a_blocking_diagnostic() {
+fn missing_dependency_is_a_reported_diagnostic() {
     let src = TempDir::new().unwrap();
     write(src.path(), "prompt.md", "see [gone](missing.md)");
     write(
@@ -216,7 +216,7 @@ fn missing_dependency_is_a_blocking_diagnostic() {
     };
     let plan = build_plan(&inputs).expect("plan should build");
 
-    assert!(plan.is_blocking());
+    assert!(!plan.is_blocking());
     assert!(
         plan.diagnostics
             .iter()
@@ -225,7 +225,7 @@ fn missing_dependency_is_a_blocking_diagnostic() {
 }
 
 #[test]
-fn dependency_cycle_is_a_blocking_diagnostic() {
+fn dependency_cycle_is_a_reported_diagnostic() {
     let src = TempDir::new().unwrap();
     write(src.path(), "a.md", "see [b](b.md)");
     write(src.path(), "b.md", "see [a](a.md)");
@@ -250,7 +250,7 @@ fn dependency_cycle_is_a_blocking_diagnostic() {
     };
     let plan = build_plan(&inputs).expect("plan should build");
 
-    assert!(plan.is_blocking());
+    assert!(!plan.is_blocking());
     assert!(
         plan.diagnostics
             .iter()
@@ -874,7 +874,7 @@ fn walkdir(root: &Path, dir: &Path) -> Vec<String> {
 #[test]
 fn install_refuses_to_write_a_blocking_plan() {
     let src = TempDir::new().unwrap();
-    write(src.path(), "prompt.md", "see [gone](missing.md)");
+    write(src.path(), "prompt.md", "see [out](../../outside.md)");
     write(
         src.path(),
         "guidance.toml",
@@ -1072,7 +1072,7 @@ fn get_keep_checkout_retains_the_managed_directory() {
 #[test]
 fn get_blocking_plan_writes_nothing_and_still_cleans_up() {
     let fixture = TempDir::new().unwrap();
-    write(fixture.path(), "prompt.md", "see [gone](missing.md)");
+    write(fixture.path(), "prompt.md", "see [out](../../outside.md)");
 
     let target = TempDir::new().unwrap();
     let explicit = target.path().join("out");

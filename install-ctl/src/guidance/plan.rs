@@ -60,7 +60,18 @@ pub struct GuidancePlan {
 
 impl GuidancePlan {
     pub fn is_blocking(&self) -> bool {
-        !self.diagnostics.is_empty()
+        self.diagnostics.iter().any(|d| {
+            matches!(
+                d.code,
+                DiagnosticCode::DuplicateDestination
+                    | DiagnosticCode::AmbiguousOwnership
+                    | DiagnosticCode::PathTraversal
+                    | DiagnosticCode::AbsoluteSourcePath
+                    | DiagnosticCode::SymlinkEscape
+                    | DiagnosticCode::UnsupportedRecipeStep
+                    | DiagnosticCode::UnsafeTarget
+            )
+        })
     }
 }
 
@@ -210,6 +221,8 @@ pub fn build_plan_with_profile(
             }
         }
     }
+
+    let selected_roots = expand_selected_roots(inputs.source_root, &selected_roots, &recipe_from);
 
     for root in &selected_roots {
         if !root.ends_with(".md") && !root.ends_with(".toml") {
@@ -387,4 +400,82 @@ pub fn render_text(plan: &GuidancePlan) -> String {
         }
     }
     out
+}
+fn expand_selected_roots(
+    source_root: &Path,
+    roots: &[String],
+    recipe_from: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut expanded = Vec::new();
+    for root in roots {
+        if recipe_from.contains_key(root) {
+            expanded.push(root.clone());
+            continue;
+        }
+        let candidate = source_root.join(root);
+        if candidate.is_dir() {
+            let mut dir_files = Vec::new();
+            collect_guidance_files_in_dir(source_root, &candidate, &mut dir_files);
+            dir_files.sort();
+            expanded.extend(dir_files);
+        } else if candidate.is_file() {
+            expanded.push(root.clone());
+        } else if !root.contains('/') && !root.contains('\\') {
+            if let Some(found) = find_matching_file(source_root, root) {
+                expanded.push(found);
+            } else {
+                expanded.push(root.clone());
+            }
+        } else {
+            expanded.push(root.clone());
+        }
+    }
+    expanded.sort();
+    expanded.dedup();
+    expanded
+}
+
+fn collect_guidance_files_in_dir(source_root: &Path, dir: &Path, out: &mut Vec<String>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_guidance_files_in_dir(source_root, &path, out);
+            } else if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    if ext == "md" || ext == "toml" {
+                        if let Ok(rel) = path.strip_prefix(source_root) {
+                            let rel_str = rel.to_string_lossy().replace('\\', "/");
+                            out.push(rel_str);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn find_matching_file(source_root: &Path, name: &str) -> Option<String> {
+    let mut matches = Vec::new();
+    find_file_by_name(source_root, source_root, name, &mut matches);
+    matches.sort();
+    matches.into_iter().next()
+}
+
+fn find_file_by_name(source_root: &Path, current_dir: &Path, name: &str, out: &mut Vec<String>) {
+    if let Ok(entries) = fs::read_dir(current_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if path.is_dir() {
+                if file_name != ".git" && file_name != "target" && file_name != "node_modules" {
+                    find_file_by_name(source_root, &path, name, out);
+                }
+            } else if path.is_file() && file_name == name {
+                if let Ok(rel) = path.strip_prefix(source_root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
 }
