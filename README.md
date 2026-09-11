@@ -182,7 +182,7 @@ repository under its `.agents/` tree:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mankinskin/install/main/install.sh \
-  | bash -s -- --root "$HOME/.local/workflow-tools" \
+  | bash -s -- --root "$HOME/.local/workflow-tools"
 ```
 
 ```bash
