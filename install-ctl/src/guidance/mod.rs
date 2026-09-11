@@ -323,6 +323,13 @@ fn run_autofix(args: &GuidanceAutofixArgs) -> Result<(), String> {
         return Err("guidance autofix --apply requires --yes to confirm the mutation".to_string());
     }
 
+    if plan.operations.is_empty() && !plan.unresolved.is_empty() {
+        return Err(format!(
+            "autofix found {} unresolved blocking finding(s) but no safe operations; provide an explicit --rewrite old-destination=new-destination for the intended transformation",
+            plan.unresolved.len()
+        ));
+    }
+
     let result = autofix::apply_plan(&repo_root, &plan, args.yes)?;
     print_autofix_result(&result, args.json);
 

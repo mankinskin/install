@@ -55,7 +55,9 @@ install-ctl guidance get       <repository-url> --select <id>... [--profile <rep
   (`stale plan`). After applying, it reruns the guidance audit; if any
   touched source still has a blocking finding for the same destination,
   every write from this call is rolled back from its in-memory backup and
-  the result reports `rolled_back: true`.
+  the result reports `rolled_back: true`. An apply with unresolved findings
+  but no safe operations fails with an actionable error instead of reporting
+  a misleading successful `0 applied` run.
 - `get` is the one-command surface: it shallow-clones `<repository-url>`
   with the system `git` binary into a managed temporary checkout, resolves
   a profile (an explicit `--profile <repo-relative-path>`, resolved inside
