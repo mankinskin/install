@@ -201,7 +201,7 @@ curl -fsSL https://raw.githubusercontent.com/mankinskin/install/main/install.sh 
 The command installs `install-ctl` and runs `guidance get`, which shallow-clones
 `meta-workspace` (including its submodules), computes the full transitive Markdown
 closure of all referenced instructions, agents, and prompts across `.agents`,
-`workflow-tools/.agents`, and `AGENTS.md` (resolved to `context-engine/AGENTS.md`),
+`workflow-tools/.agents`, and `AGENTS.md` (resolved to `workflow-tools/AGENTS.md`),
 installs all guidance files into `$PWD/.agents/`, and automatically cleans up the
 temporary clone. This exact flow is also exercised during containerized end-to-end
 validation (`docker-validation/run-in-container.sh`).

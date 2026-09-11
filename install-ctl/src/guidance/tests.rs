@@ -1153,7 +1153,7 @@ fn get_installs_all_meta_workspace_guidance() {
     let fixture = TempDir::new().unwrap();
     write(
         fixture.path(),
-        "context-engine/AGENTS.md",
+        "workflow-tools/AGENTS.md",
         "See [world model](../workflow-tools/.agents/instructions/workflow/agent-world-model.instructions.md) and [implement](../.agents/agents/implement.agent.md).",
     );
     write(
@@ -1191,7 +1191,7 @@ fn get_installs_all_meta_workspace_guidance() {
     let mut args = get_args(
         "https://github.com/mankinskin/meta-workspace.git",
         vec![
-            "context-engine/AGENTS.md".to_string(),
+            "workflow-tools/AGENTS.md".to_string(),
             ".agents/agents/implement.agent.md".to_string(),
             "workflow-tools/.agents/agents/orchestrator.agent.md".to_string(),
             "workflow-tools/.agents/prompts/iteration.prompt.md".to_string(),
@@ -1204,9 +1204,9 @@ fn get_installs_all_meta_workspace_guidance() {
 
     result.expect("installing all meta-workspace guidance should succeed");
 
-    // Under repo scope, AGENTS.md stays at context-engine/AGENTS.md, while .agents/... lands under target's .agents/
+    // Under repo scope, AGENTS.md stays at workflow-tools/AGENTS.md, while .agents/... lands under target's .agents/
     let dest = target.path();
-    assert!(dest.join(".agents/context-engine/AGENTS.md").is_file());
+    assert!(dest.join(".agents/workflow-tools/AGENTS.md").is_file());
     assert!(
         dest.join(".agents/instructions/workflow/agent-world-model.instructions.md")
             .is_file()
