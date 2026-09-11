@@ -183,14 +183,17 @@ repository under its `.agents/` tree:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mankinskin/install/main/install.sh \
   | bash -s -- --root "$HOME/.local/workflow-tools" \
-  && "$HOME/.local/workflow-tools/bin/install-ctl" \
-       guidance get \
-       https://github.com/mankinskin/meta-workspace.git \
-       --select workflow-tools/.agents \
-       --select .agents \
-       --select AGENTS.md \
-       --target "$PWD" \
-       --destination-scope repo
+```
+
+```bash
+"$HOME/.local/workflow-tools/bin/install-ctl" \
+  guidance get \
+  https://github.com/mankinskin/meta-workspace.git \
+  --select workflow-tools/.agents \
+  --select .agents \
+  --select AGENTS.md \
+  --target "$PWD" \
+  --destination-scope repo
 ```
 
 The command installs `install-ctl` and runs `guidance get`, which shallow-clones
