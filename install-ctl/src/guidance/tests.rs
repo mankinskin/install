@@ -949,7 +949,7 @@ fn install_is_idempotent_and_preserves_unrelated_files() {
 
 // -- guidance get (W9, AC1-AC10) ----------------------------------------------
 
-use super::{GuidanceGetArgs, run_get};
+use super::{GuidanceGetArgs, run_get, run_get_with_reporter};
 use crate::guidance::profile::DestinationScopeKind as ScopeKind;
 
 /// Recursively copies `fixture` to `dest`, standing in for `git clone`.
@@ -1015,6 +1015,39 @@ fn get_profile_less_select_installs_a_bare_path_directly() {
     assert!(
         !checkout_path.exists(),
         "managed checkout must be cleaned up by default"
+    );
+}
+
+#[test]
+fn get_reports_each_execution_phase() {
+    let fixture = TempDir::new().unwrap();
+    write(fixture.path(), "prompt.md", "content");
+    let target = TempDir::new().unwrap();
+    let mut args = get_args(
+        "https://example.invalid/repo.git",
+        vec!["prompt.md".to_string()],
+        target.path().to_path_buf(),
+    );
+    args.destination_path = Some(target.path().join("out"));
+    let messages = std::cell::RefCell::new(Vec::new());
+
+    let (result, _) = run_get_with_reporter(
+        &args,
+        fake_clone_from(fixture.path().to_path_buf()),
+        &|message| messages.borrow_mut().push(message.to_string()),
+    );
+
+    result.expect("get should succeed");
+    assert_eq!(
+        messages.into_inner(),
+        vec![
+            "creating managed checkout",
+            "cloning https://example.invalid/repo.git",
+            "resolving guidance profile",
+            "building installation plan",
+            "installing guidance artifacts",
+            "cleaning up managed checkout",
+        ]
     );
 }
 

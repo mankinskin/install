@@ -30,6 +30,8 @@ use self::destination::DestinationPaths;
 use self::plan::{PlanInputs, build_plan, build_plan_with_profile, render_text};
 use self::profile::{DestinationScopeKind, load_profile, synthesize_direct_profile};
 
+type ProgressReporter<'a> = dyn Fn(&str) + 'a;
+
 #[derive(Subcommand)]
 pub enum GuidanceCmd {
     /// Compute a read-only installation plan for a guidance profile: no
@@ -216,6 +218,15 @@ fn run_get(
     args: &GuidanceGetArgs,
     clone_fn: impl Fn(&str, &Path) -> Result<(), String>,
 ) -> (Result<(), String>, PathBuf) {
+    run_get_with_reporter(args, clone_fn, &|message| eprintln!("guidance get: {message}"))
+}
+
+fn run_get_with_reporter(
+    args: &GuidanceGetArgs,
+    clone_fn: impl Fn(&str, &Path) -> Result<(), String>,
+    reporter: &ProgressReporter<'_>,
+) -> (Result<(), String>, PathBuf) {
+    reporter("creating managed checkout");
     let checkout = match tempfile::Builder::new()
         .prefix("install-ctl-guidance-get-")
         .tempdir()
@@ -234,9 +245,11 @@ fn run_get(
     // `git clone` accepts an existing empty directory as its destination.
 
     let result = (|| -> Result<(), String> {
+        reporter(&format!("cloning {}", args.repository_url));
         clone_fn(&args.repository_url, &checkout_path)
             .map_err(|e| format!("failed to clone '{}': {e}", args.repository_url))?;
 
+        reporter("resolving guidance profile");
         let profile = match &args.profile {
             Some(relative) => load_profile(&checkout_path.join(relative))?,
             None => synthesize_direct_profile(&args.select)?,
@@ -254,6 +267,7 @@ fn run_get(
             explicit_override: args.destination_path.as_deref(),
             destination_paths: &destination_paths,
         };
+        reporter("building installation plan");
         let plan = build_plan_with_profile(profile, &inputs)?;
         print_plan(&plan, args.json);
         if plan.is_blocking() {
@@ -283,6 +297,7 @@ fn run_get(
             ));
         }
 
+        reporter("installing guidance artifacts");
         let report = install::install_plan(&plan, &checkout_path)?;
         println!(
             "installed {} artifact(s), {} unchanged",
@@ -296,6 +311,9 @@ fn run_get(
         // `checkout` (a `TempDir`) would delete this on drop; `keep`
         // disarms that so the directory survives past this function.
         let _ = checkout.keep();
+        reporter(&format!("keeping managed checkout at {}", checkout_path.display()));
+    } else {
+        reporter("cleaning up managed checkout");
     }
     (result, checkout_path)
 }
