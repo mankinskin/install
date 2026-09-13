@@ -218,7 +218,9 @@ fn run_get(
     args: &GuidanceGetArgs,
     clone_fn: impl Fn(&str, &Path) -> Result<(), String>,
 ) -> (Result<(), String>, PathBuf) {
-    run_get_with_reporter(args, clone_fn, &|message| eprintln!("guidance get: {message}"))
+    run_get_with_reporter(args, clone_fn, &|message| {
+        eprintln!("guidance get: {message}")
+    })
 }
 
 fn run_get_with_reporter(
@@ -311,7 +313,10 @@ fn run_get_with_reporter(
         // `checkout` (a `TempDir`) would delete this on drop; `keep`
         // disarms that so the directory survives past this function.
         let _ = checkout.keep();
-        reporter(&format!("keeping managed checkout at {}", checkout_path.display()));
+        reporter(&format!(
+            "keeping managed checkout at {}",
+            checkout_path.display()
+        ));
     } else {
         reporter("cleaning up managed checkout");
     }

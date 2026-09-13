@@ -26,8 +26,12 @@ pub fn clone_shallow(url: &str, dest: &Path) -> Result<(), String> {
         .status()
     {
         Ok(status) if status.success() => {}
-        Ok(status) => eprintln!("guidance get: top-level submodule initialization exited with {status}; continuing"),
-        Err(error) => eprintln!("guidance get: could not start top-level submodule initialization: {error}; continuing"),
+        Ok(status) => eprintln!(
+            "guidance get: top-level submodule initialization exited with {status}; continuing"
+        ),
+        Err(error) => eprintln!(
+            "guidance get: could not start top-level submodule initialization: {error}; continuing"
+        ),
     }
 
     // Recursively initialize each top-level submodule individually so a failure
@@ -64,8 +68,12 @@ pub fn clone_shallow(url: &str, dest: &Path) -> Result<(), String> {
                     .status()
                 {
                     Ok(status) if status.success() => {}
-                    Ok(status) => eprintln!("guidance get: submodule {sub_path} initialization exited with {status}; continuing"),
-                    Err(error) => eprintln!("guidance get: could not start submodule {sub_path} initialization: {error}; continuing"),
+                    Ok(status) => eprintln!(
+                        "guidance get: submodule {sub_path} initialization exited with {status}; continuing"
+                    ),
+                    Err(error) => eprintln!(
+                        "guidance get: could not start submodule {sub_path} initialization: {error}; continuing"
+                    ),
                 }
             }
         }

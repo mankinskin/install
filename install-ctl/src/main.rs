@@ -10,6 +10,7 @@ mod process;
 mod registry;
 mod selection;
 mod shell;
+mod update;
 
 use std::{path::Path, time::Duration};
 
@@ -61,6 +62,8 @@ enum Command {
         #[arg(long)]
         root: Option<std::path::PathBuf>,
     },
+    /// Fetch and install the latest install-ctl revision from its repository.
+    Update,
     /// Render the registry projection to COMMANDS.md, or verify it is current.
     Catalog {
         #[arg(long)]
@@ -171,6 +174,14 @@ fn main() {
                 },
             };
             run_self_uninstall(&target_root);
+        }
+        Some(Command::Update) => {
+            relaunch_from_shadow_copy_if_replacing_self(true);
+            if cli.dry_run {
+                update::print_plan();
+            } else if let Err(error) = update::run() {
+                fail(&error);
+            }
         }
         Some(Command::Catalog { check }) => {
             if let Err(error) = sync_catalog(check) {
@@ -578,7 +589,7 @@ fn install_command_string(
 /// No-op on non-Windows targets, where replacing a running executable's
 /// backing file is a normal, supported operation, and when this process is
 /// itself already a relaunched shadow copy (`SHADOW_ENV_VAR` set).
-fn relaunch_from_shadow_copy_if_replacing_self(selected: &[Artifact]) {
+fn relaunch_from_shadow_copy_if_replacing_self(replacing_self: bool) {
     if !cfg!(windows) || std::env::var_os(SHADOW_ENV_VAR).is_some() {
         return;
     }
@@ -594,14 +605,7 @@ fn relaunch_from_shadow_copy_if_replacing_self(selected: &[Artifact]) {
         return;
     };
 
-    let installing_self = selected.iter().any(|a| {
-        a.kind == ArtifactKind::RustBinary
-            && a.bin
-                .as_deref()
-                .unwrap_or(a.id.as_str())
-                .eq_ignore_ascii_case(&own_bin)
-    });
-    if !installing_self {
+    if !replacing_self {
         return;
     }
 
@@ -677,7 +681,15 @@ fn windows_display_path(path: std::path::PathBuf) -> String {
 }
 
 fn run_install(selected: &[Artifact], force: bool) {
-    relaunch_from_shadow_copy_if_replacing_self(selected);
+    let replacing_self = selected.iter().any(|artifact| {
+        artifact.kind == ArtifactKind::RustBinary
+            && artifact
+                .bin
+                .as_deref()
+                .unwrap_or(artifact.id.as_str())
+                .eq_ignore_ascii_case("install-ctl")
+    });
+    relaunch_from_shadow_copy_if_replacing_self(replacing_self);
 
     let repo_root = match registry::resolve_repo_root() {
         Ok(root) => root,
