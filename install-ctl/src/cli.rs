@@ -5,6 +5,19 @@
 use clap::{Subcommand, ValueEnum};
 
 #[derive(Subcommand)]
+pub enum WorkspaceCmd {
+    /// Write or merge a workspace-local `.vscode/mcp.json` for selected MCP artifacts.
+    McpConfig {
+        /// Workspace root containing `.vscode/mcp.json`.
+        #[arg(long)]
+        workspace: std::path::PathBuf,
+        /// Artifact ids, categories, or `all`. The `log-viewer` service is included as a special-case MCP proxy.
+        #[arg(required = true)]
+        selection: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum ViewerCmd {
     /// List every component defined in viewer-ctl.toml.
     List,

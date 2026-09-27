@@ -15,7 +15,7 @@ mod update;
 use std::{path::Path, time::Duration};
 
 use clap::{Parser, Subcommand};
-use cli::ViewerCmd;
+use cli::{ViewerCmd, WorkspaceCmd};
 use config::Config;
 use registry::{Artifact, ArtifactKind, load_registry, sync_catalog};
 use selection::resolve_selection;
@@ -94,6 +94,11 @@ enum Command {
     Guidance {
         #[command(subcommand)]
         command: guidance::GuidanceCmd,
+    },
+    /// Workspace-scoped helper commands.
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCmd,
     },
 }
 
@@ -204,6 +209,13 @@ fn main() {
                 fail(&e);
             }
         }
+        Some(Command::Workspace { command }) => match command {
+            WorkspaceCmd::McpConfig { workspace, selection } => {
+                if let Err(e) = commands::workspace::run_mcp_config(&workspace, &selection, cli.dry_run) {
+                    fail(&e);
+                }
+            }
+        },
         None => {
             eprintln!("error: no command given; try --list or `install <selection>`");
             std::process::exit(1);

@@ -10,6 +10,7 @@ pub mod extension;
 pub mod frontend;
 pub mod server;
 pub mod task;
+pub mod workspace;
 
 use std::path::Path;
 
