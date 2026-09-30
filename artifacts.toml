@@ -112,6 +112,16 @@ safety = "approval-required"
 bin = "feedback"
 
 [[artifact]]
+id = "openrouter-auth"
+category = "cli"
+kind = "rust-binary"
+source_path = "openrouter-auth"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "openrouter-auth"
+
+[[artifact]]
 id = "session-cli"
 category = "cli"
 kind = "rust-binary"
