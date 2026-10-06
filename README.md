@@ -8,6 +8,18 @@ than repeating the same rules.
 
 ## Artifact registry and catalog
 
+Rust binary installation runs an online, unlocked workspace warm-up build by
+default, then installs the resulting binaries with Cargo's normal online,
+unlocked behavior. `--offline` and `--locked` are opt-in flags on the
+`install-ctl install` command and affect only the `cargo install` step:
+
+```bash
+install-ctl install install-ctl
+install-ctl install install-ctl --offline
+install-ctl install install-ctl --locked
+install-ctl install install-ctl --offline --locked
+```
+
 `artifacts.toml` is the runtime-read registry of installable binaries and
 hooks. `COMMANDS.md` at the repository root is its generated projection:
 
@@ -30,6 +42,8 @@ install-ctl guidance install   --source <repo> --profile <profile.toml> --select
 install-ctl guidance uninstall --source <repo> --profile <profile.toml> --select <id>... --target <repo> [--destination-scope ...] [--destination-path ...] [--json]
 install-ctl guidance autofix   --repo-root <repo> [--scope <path>] [--rewrite old=new]... (--plan | --apply --yes) [--json]
 install-ctl guidance get       <repository-url> --select <id>... [--profile <repo-relative-path>] [--target <repo>] [--destination-scope ...] [--destination-path ...] [--keep-checkout] [--json]
+install-ctl guidance link      --repo <repo> --harness copilot-cli (--plan | --apply) [--json]
+install-ctl guidance unlink    --repo <repo> --harness copilot-cli (--plan | --apply) [--json]
 ```
 
 - `plan` computes a read-only installation plan: no writes, no recipe
@@ -68,6 +82,72 @@ install-ctl guidance get       <repository-url> --select <id>... [--profile <rep
   blocking plan, or error — unless `--keep-checkout` is given, in which case
   its path is printed. No Git-client crate is added; the clone shells out to
   `git`, styled after `workflow-tools/session/crates/worktree-ctl/src/git.rs`.
+
+## Local Harness Links Without Copies
+
+Use `guidance link` when the guidance already exists in a persistent local
+repository and `.agents` must remain the single source. This mode does not
+use the copy installer, fetch a repository, rewrite content, or materialize
+templates. It creates real directory symbolic links with relative targets.
+
+```bash
+install-ctl guidance link --repo . --harness copilot-cli --plan
+install-ctl guidance link --repo . --harness copilot-cli --apply
+```
+
+Only `copilot-cli` is supported initially:
+
+| Harness Path | Canonical Source | Purpose |
+|---|---|---|
+| `.github/agents` | `.agents/agents` | Custom agent discovery |
+| `.github/instructions` | `.agents/instructions` | Modular instruction discovery |
+| `.claude/commands` | `.agents/prompts` | CLI's Claude-compatible Markdown command loader |
+
+The harness paths remain visible, but are aliases rather than independent
+guidance sources. Original edits and new files are immediately visible
+through the aliases without synchronization. No `.copilot` alias is created.
+Template bytes and metadata are preserved; this mode does not translate
+VS Code-specific template features into CLI equivalents. Restart the CLI
+after linking to refresh discovery.
+
+`--repo` defaults to `.`; `--harness` and exactly one of `--plan`/`--apply`
+are required. Plans are read-only. Missing optional source directories are
+reported as skipped; linking fails when no source exists. Sources must
+resolve inside the selected repository. Correct existing symbolic links are
+unchanged. Ordinary destination files/directories, junctions, foreign links,
+and indirect destination parents block the entire operation before mutation.
+The command never overwrites a conflicting path.
+
+On Windows, enable Developer Mode or run the command yourself from an
+administrator terminal if symbolic-link creation is denied. There is **no
+copy, hardlink, or junction fallback**, and the command never elevates itself.
+A failed link operation rolls back only links and empty parent directories
+created by that call, reporting any rollback failure.
+
+Remove the harness aliases without removing their source files:
+
+```bash
+install-ctl guidance unlink --repo . --harness copilot-cli --plan
+install-ctl guidance unlink --repo . --harness copilot-cli --apply
+```
+
+Unlink removes only matching symbolic links, including expected broken links.
+Missing aliases are harmless. Foreign paths block removal. Unlink does not
+remove `.agents`, template contents, or parent directories. Existing
+`install`, `uninstall`, `get`, and `autofix` retain their separate semantics.
+
+`--json` emits one object with `plan`, `applied`, and `error`. The plan contains
+the resolved repository, harness, operation, source/destination/relative-target
+entries, actions, skipped sources, and diagnostics. `applied` is true only
+after successful application; any blocked or failed operation exits nonzero.
+
+Focused validation is `cargo test -p install-ctl guidance::links`; CLI parsing
+and read-only command tests run with `cargo test -p install-ctl guidance_link_cli`.
+Four real-symlink tests are explicitly ignored on Windows without a known
+symlink-capable environment. With the prerequisite enabled, run them using
+`cargo test -p install-ctl guidance::links -- --ignored`. Unix runs the same
+real-symlink tests normally. Windows additionally tests actual junction
+rejection without requiring symbolic-link privileges.
 
 ## Artifact & Self Uninstallation
 

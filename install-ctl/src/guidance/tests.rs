@@ -19,6 +19,107 @@ fn write(dir: &Path, rel: &str, content: &str) {
     fs::write(path, content).unwrap();
 }
 
+#[test]
+fn cargo_install_options_are_opt_in_and_independent() {
+    use clap::Parser;
+
+    let cases: &[(&[&str], bool, bool)] = &[
+        (&[], false, false),
+        (&["--offline"], true, false),
+        (&["--locked"], false, true),
+        (&["--offline", "--locked"], true, true),
+    ];
+    for (flags, expected_offline, expected_locked) in cases {
+        let parsed = crate::Cli::try_parse_from(
+            ["install-ctl", "install", "install-ctl"]
+                .into_iter()
+                .chain(flags.iter().copied()),
+        )
+        .unwrap();
+        let Some(crate::Command::Install {
+            offline, locked, ..
+        }) = parsed.command
+        else {
+            panic!("expected install command");
+        };
+        assert_eq!(offline, *expected_offline);
+        assert_eq!(locked, *expected_locked);
+
+        let args = crate::install_args(
+            Path::new("repo"),
+            Path::new("target"),
+            "install/install-ctl",
+            &["install-ctl"],
+            &[],
+            true,
+            crate::CargoInstallOptions { offline, locked },
+        );
+        assert_eq!(args.iter().any(|arg| arg == "--offline"), offline);
+        assert_eq!(args.iter().any(|arg| arg == "--locked"), locked);
+    }
+}
+
+#[test]
+fn warmup_build_does_not_inherit_install_options() {
+    let plan = crate::RustBuildPlan {
+        manifest_path: "Cargo.toml".to_string(),
+        packages: vec![],
+        bins: vec![],
+        feature_flags: vec![],
+    };
+    let args = plan.build_args();
+    assert!(!args.iter().any(|arg| arg == "--offline"));
+    assert!(!args.iter().any(|arg| arg == "--locked"));
+}
+
+#[test]
+fn guidance_link_cli_requires_exactly_one_mode_and_known_harness() {
+    use clap::Parser;
+    for command in ["link", "unlink"] {
+        let base = [
+            "install-ctl",
+            "guidance",
+            command,
+            "--harness",
+            "copilot-cli",
+        ];
+        assert!(crate::Cli::try_parse_from(base).is_err());
+        assert!(crate::Cli::try_parse_from(base.into_iter().chain(["--plan", "--apply"])).is_err());
+        assert!(crate::Cli::try_parse_from(base.into_iter().chain(["--plan", "--json"])).is_ok());
+        assert!(crate::Cli::try_parse_from(base.into_iter().chain(["--apply"])).is_ok());
+        assert!(
+            crate::Cli::try_parse_from([
+                "install-ctl",
+                "guidance",
+                command,
+                "--harness",
+                "unknown",
+                "--plan"
+            ])
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn guidance_link_cli_plan_does_not_create_harness_paths() {
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), ".agents/agents/example.agent.md", "original");
+    let args = super::GuidanceLinkArgs {
+        repo: repo.path().to_owned(),
+        harness: super::links::Harness::CopilotCli,
+        plan: true,
+        apply: false,
+        json: true,
+    };
+    super::run(super::GuidanceCmd::Link(args)).unwrap();
+    assert!(!repo.path().join(".github").exists());
+    assert_eq!(
+        fs::read_to_string(repo.path().join(".agents/agents/example.agent.md")).unwrap(),
+        "original"
+    );
+}
+
 fn test_destination_paths(tmp: &TempDir) -> DestinationPaths {
     DestinationPaths {
         user_root: tmp.path().join("user-dest"),

@@ -11,6 +11,7 @@ pub mod destination;
 pub mod git;
 pub mod graph;
 pub mod install;
+pub mod links;
 pub mod plan;
 pub mod profile;
 pub mod rewrite;
@@ -34,6 +35,10 @@ type ProgressReporter<'a> = dyn Fn(&str) + 'a;
 
 #[derive(Subcommand)]
 pub enum GuidanceCmd {
+    /// Expose local .agents guidance through harness-specific symbolic links.
+    Link(GuidanceLinkArgs),
+    /// Remove only matching harness symbolic links, preserving the sources.
+    Unlink(GuidanceLinkArgs),
     /// Compute a read-only installation plan for a guidance profile: no
     /// writes, no recipe execution, no network access.
     Plan(GuidanceArgs),
@@ -53,6 +58,25 @@ pub enum GuidanceCmd {
     /// profile, plans, and installs into `--target` (default `.`), then
     /// deletes the managed checkout unless `--keep-checkout` is given.
     Get(GuidanceGetArgs),
+}
+
+#[derive(Args)]
+pub struct GuidanceLinkArgs {
+    /// Repository containing the canonical .agents directories.
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+    /// Harness whose discovery paths should be linked.
+    #[arg(long, value_enum)]
+    pub harness: links::Harness,
+    /// Print a read-only plan without modifying the repository.
+    #[arg(long, conflicts_with = "apply", required_unless_present = "apply")]
+    pub plan: bool,
+    /// Apply symbolic-link changes; never copy files or create junctions.
+    #[arg(long, conflicts_with = "plan", required_unless_present = "plan")]
+    pub apply: bool,
+    /// Emit one JSON object containing the plan and application result.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
@@ -164,6 +188,8 @@ pub struct GuidanceGetArgs {
 
 pub fn run(command: GuidanceCmd) -> Result<(), String> {
     match command {
+        GuidanceCmd::Link(args) => run_links(args, links::LinkOperation::Link),
+        GuidanceCmd::Unlink(args) => run_links(args, links::LinkOperation::Unlink),
         GuidanceCmd::Plan(args) => {
             let plan = build_plan_from_args(&args)?;
             print_plan(&plan, args.json);
@@ -205,6 +231,52 @@ pub fn run(command: GuidanceCmd) -> Result<(), String> {
             result
         }
     }
+}
+
+fn run_links(args: GuidanceLinkArgs, operation: links::LinkOperation) -> Result<(), String> {
+    let plan = links::build_link_plan(&args.repo, args.harness, operation)?;
+    let result = if !plan.diagnostics.is_empty() {
+        Err(format!(
+            "blocking link plan: {}",
+            plan.diagnostics.join("; ")
+        ))
+    } else if args.apply {
+        links::apply_link_plan(&plan)
+    } else {
+        Ok(())
+    };
+    if args.json {
+        let report = serde_json::json!({
+            "plan": &plan,
+            "applied": args.apply && result.is_ok(),
+            "error": result.as_ref().err(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| format!("cannot serialize link report: {error}"))?
+        );
+    } else {
+        for entry in &plan.entries {
+            println!(
+                "{:?}: {} -> {} (source {})",
+                entry.action,
+                entry.destination,
+                entry.target.display(),
+                entry.source
+            );
+        }
+        for source in &plan.skipped_sources {
+            println!("Skipped missing source: {source}");
+        }
+        for diagnostic in &plan.diagnostics {
+            println!("Blocked: {diagnostic}");
+        }
+        if args.apply && result.is_ok() {
+            println!("Applied symbolic-link plan; no guidance files copied");
+        }
+    }
+    result
 }
 
 /// Fetch `args.repository_url`, resolve/synthesize a profile, plan, and

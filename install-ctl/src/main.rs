@@ -47,6 +47,12 @@ enum Command {
         /// Skip passing --force to `cargo install` for rust-binary artifacts.
         #[arg(long)]
         no_force: bool,
+        /// Run `cargo install` without network access; the warm-up build remains online.
+        #[arg(long)]
+        offline: bool,
+        /// Pass --locked to `cargo install` and require its lockfile to remain unchanged.
+        #[arg(long)]
+        locked: bool,
     },
     /// Uninstall one or more artifacts by id, category, or "all".
     Uninstall {
@@ -124,6 +130,8 @@ fn main() {
         Some(Command::Install {
             selection,
             no_force,
+            offline,
+            locked,
         }) => {
             let reg = match load_registry() {
                 Ok(reg) => reg,
@@ -137,10 +145,11 @@ fn main() {
                 fail("selection matched no artifacts");
             }
             let force = !no_force;
+            let cargo_options = CargoInstallOptions { offline, locked };
             if cli.dry_run {
-                print_plan(&selected, force);
+                print_plan(&selected, force, cargo_options);
             } else {
-                run_install(&selected, force);
+                run_install(&selected, force, cargo_options);
             }
         }
         Some(Command::Uninstall { selection, root }) => {
@@ -210,8 +219,13 @@ fn main() {
             }
         }
         Some(Command::Workspace { command }) => match command {
-            WorkspaceCmd::McpConfig { workspace, selection } => {
-                if let Err(e) = commands::workspace::run_mcp_config(&workspace, &selection, cli.dry_run) {
+            WorkspaceCmd::McpConfig {
+                workspace,
+                selection,
+            } => {
+                if let Err(e) =
+                    commands::workspace::run_mcp_config(&workspace, &selection, cli.dry_run)
+                {
                     fail(&e);
                 }
             }
@@ -338,7 +352,7 @@ fn run_self_uninstall(target_root: &Path) {
     }
 }
 
-fn print_plan(selected: &[Artifact], force: bool) {
+fn print_plan(selected: &[Artifact], force: bool, cargo_options: CargoInstallOptions) {
     let repo_root = match registry::resolve_repo_root() {
         Ok(root) => root,
         Err(e) => fail(&e),
@@ -359,7 +373,15 @@ fn print_plan(selected: &[Artifact], force: bool) {
             println!("==> {}", ids.join(", "));
             println!(
                 "    {}",
-                install_command_string(&repo_root, &target_dir, path, &bins, &features, force)
+                install_command_string(
+                    &repo_root,
+                    &target_dir,
+                    path,
+                    &bins,
+                    &features,
+                    force,
+                    cargo_options,
+                )
             );
         }
     }
@@ -405,6 +427,12 @@ struct RustBuildPlan {
     packages: Vec<String>,
     bins: Vec<String>,
     feature_flags: Vec<String>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct CargoInstallOptions {
+    offline: bool,
+    locked: bool,
 }
 
 impl RustBuildPlan {
@@ -544,6 +572,7 @@ fn install_args(
     bins: &[&str],
     features: &[&str],
     force: bool,
+    cargo_options: CargoInstallOptions,
 ) -> Vec<String> {
     let full_path = repo_root.join(path).to_string_lossy().to_string();
     let target_dir_str = target_dir.to_string_lossy().to_string();
@@ -553,8 +582,13 @@ fn install_args(
         full_path,
         "--target-dir".to_string(),
         target_dir_str,
-        "--offline".to_string(),
     ];
+    if cargo_options.offline {
+        args.push("--offline".to_string());
+    }
+    if cargo_options.locked {
+        args.push("--locked".to_string());
+    }
     for bin in bins {
         args.push("--bin".to_string());
         args.push((*bin).to_string());
@@ -576,10 +610,17 @@ fn install_command_string(
     bins: &[&str],
     features: &[&str],
     force: bool,
+    cargo_options: CargoInstallOptions,
 ) -> String {
     std::iter::once("cargo".to_string())
         .chain(install_args(
-            repo_root, target_dir, path, bins, features, force,
+            repo_root,
+            target_dir,
+            path,
+            bins,
+            features,
+            force,
+            cargo_options,
         ))
         .collect::<Vec<_>>()
         .join(" ")
@@ -692,7 +733,7 @@ fn windows_display_path(path: std::path::PathBuf) -> String {
     path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
 }
 
-fn run_install(selected: &[Artifact], force: bool) {
+fn run_install(selected: &[Artifact], force: bool, cargo_options: CargoInstallOptions) {
     let replacing_self = selected.iter().any(|artifact| {
         artifact.kind == ArtifactKind::RustBinary
             && artifact
@@ -718,7 +759,13 @@ fn run_install(selected: &[Artifact], force: bool) {
     let (rust_artifacts, ext_artifacts) = split_by_kind(selected);
 
     if !rust_artifacts.is_empty() {
-        install_rust_binaries(&rust_artifacts, &repo_root, &target_dir, force);
+        install_rust_binaries(
+            &rust_artifacts,
+            &repo_root,
+            &target_dir,
+            force,
+            cargo_options,
+        );
     }
 
     for artifact in ext_artifacts {
@@ -731,6 +778,7 @@ fn install_rust_binaries(
     repo_root: &Path,
     target_dir: &Path,
     force: bool,
+    cargo_options: CargoInstallOptions,
 ) {
     let plan = match RustBuildPlan::new(artifacts, repo_root) {
         Ok(p) => p,
@@ -785,7 +833,15 @@ fn install_rust_binaries(
             }
         }
 
-        let args = install_args(repo_root, target_dir, path, &stale_bins, &features, force);
+        let args = install_args(
+            repo_root,
+            target_dir,
+            path,
+            &stale_bins,
+            &features,
+            force,
+            cargo_options,
+        );
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let label = ids.join(", ");
         println!("==> {label}");
