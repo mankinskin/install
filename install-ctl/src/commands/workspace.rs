@@ -13,9 +13,14 @@ pub struct WorkspaceMcpConfigReport {
     pub path: PathBuf,
 }
 
-pub fn run_mcp_config(workspace: &Path, selection_tokens: &[String], dry_run: bool) -> Result<(), String> {
+pub fn run_mcp_config(
+    workspace: &Path,
+    selection_tokens: &[String],
+    dry_run: bool,
+) -> Result<(), String> {
     let reg = load_registry()?;
-    let mut selected = filter_workspace_mcp_artifacts(resolve_selection(&reg.artifacts, selection_tokens)?);
+    let mut selected =
+        filter_workspace_mcp_artifacts(resolve_selection(&reg.artifacts, selection_tokens)?);
 
     if selected.is_empty() {
         return Err("selection matched no artifacts".to_string());
@@ -23,7 +28,9 @@ pub fn run_mcp_config(workspace: &Path, selection_tokens: &[String], dry_run: bo
 
     let workspace_entries = selected
         .iter()
-        .filter_map(|artifact| build_server_entry(artifact).map(|entry| (artifact.id.clone(), entry)))
+        .filter_map(|artifact| {
+            build_server_entry(artifact).map(|entry| (artifact.id.clone(), entry))
+        })
         .collect::<BTreeMap<_, _>>();
 
     if workspace_entries.is_empty() {
@@ -42,12 +49,20 @@ pub fn run_mcp_config(workspace: &Path, selection_tokens: &[String], dry_run: bo
 
     let servers = if existing.get("servers").is_none() {
         existing["servers"] = serde_json::json!({});
-        existing.get_mut("servers").and_then(|v| v.as_object_mut()).unwrap()
+        existing
+            .get_mut("servers")
+            .and_then(|v| v.as_object_mut())
+            .unwrap()
     } else {
         existing
             .get_mut("servers")
             .and_then(|v| v.as_object_mut())
-            .ok_or_else(|| format!("{} does not contain a JSON object at top-level 'servers'", config_path.display()))?
+            .ok_or_else(|| {
+                format!(
+                    "{} does not contain a JSON object at top-level 'servers'",
+                    config_path.display()
+                )
+            })?
     };
 
     let mut report = WorkspaceMcpConfigReport {
@@ -74,8 +89,12 @@ pub fn run_mcp_config(workspace: &Path, selection_tokens: &[String], dry_run: bo
         }
     }
 
-    let rendered = serde_json::to_string_pretty(&existing)
-        .map_err(|e| format!("failed to serialize JSON for {}: {e}", config_path.display()))?;
+    let rendered = serde_json::to_string_pretty(&existing).map_err(|e| {
+        format!(
+            "failed to serialize JSON for {}: {e}",
+            config_path.display()
+        )
+    })?;
 
     if dry_run {
         println!("workspace={}", workspace.display());
@@ -88,8 +107,12 @@ pub fn run_mcp_config(workspace: &Path, selection_tokens: &[String], dry_run: bo
     }
 
     if !config_path.parent().is_some_and(|parent| parent.exists()) {
-        fs::create_dir_all(config_path.parent().unwrap())
-            .map_err(|e| format!("failed to create {}: {e}", config_path.parent().unwrap().display()))?;
+        fs::create_dir_all(config_path.parent().unwrap()).map_err(|e| {
+            format!(
+                "failed to create {}: {e}",
+                config_path.parent().unwrap().display()
+            )
+        })?;
     }
 
     fs::write(&config_path, format!("{rendered}\n"))
@@ -115,7 +138,7 @@ fn build_server_entry(artifact: &Artifact) -> Option<serde_json::Value> {
 
     let mut args = vec!["--", artifact.id.as_str()];
     if artifact.id == "log-viewer" {
-        args = vec!["--", "log-viewer", "--mcp"]; 
+        args = vec!["--", "log-viewer", "--mcp"];
     }
 
     Some(serde_json::json!({
@@ -138,13 +161,42 @@ mod tests {
     fn selects_only_registry_mcp_entries() {
         let registry = crate::registry::Registry {
             artifacts: vec![
-                Artifact { id: "ticket-mcp".into(), category: "mcp".into(), kind: crate::registry::ArtifactKind::RustBinary, path: "ticket".into(), bin: Some("ticket-mcp".into()), features: vec!["mcp".into()], npm_script: None, extension_id: None },
-                Artifact { id: "log-viewer".into(), category: "service".into(), kind: crate::registry::ArtifactKind::RustBinary, path: "log/crates/log-viewer".into(), bin: Some("log-viewer".into()), features: vec![], npm_script: None, extension_id: None },
-                Artifact { id: "context-mcp".into(), category: "misc".into(), kind: crate::registry::ArtifactKind::RustBinary, path: "context".into(), bin: Some("context-mcp".into()), features: vec![], npm_script: None, extension_id: None },
+                Artifact {
+                    id: "ticket-mcp".into(),
+                    category: "mcp".into(),
+                    kind: crate::registry::ArtifactKind::RustBinary,
+                    path: "ticket".into(),
+                    bin: Some("ticket-mcp".into()),
+                    features: vec!["mcp".into()],
+                    npm_script: None,
+                    extension_id: None,
+                },
+                Artifact {
+                    id: "log-viewer".into(),
+                    category: "service".into(),
+                    kind: crate::registry::ArtifactKind::RustBinary,
+                    path: "log/crates/log-viewer".into(),
+                    bin: Some("log-viewer".into()),
+                    features: vec![],
+                    npm_script: None,
+                    extension_id: None,
+                },
+                Artifact {
+                    id: "context-mcp".into(),
+                    category: "misc".into(),
+                    kind: crate::registry::ArtifactKind::RustBinary,
+                    path: "context".into(),
+                    bin: Some("context-mcp".into()),
+                    features: vec![],
+                    npm_script: None,
+                    extension_id: None,
+                },
             ],
         };
 
-        let selected = filter_workspace_mcp_artifacts(resolve_selection(&registry.artifacts, &["all".to_string()]).unwrap());
+        let selected = filter_workspace_mcp_artifacts(
+            resolve_selection(&registry.artifacts, &["all".to_string()]).unwrap(),
+        );
         let ids: Vec<_> = selected.into_iter().map(|a| a.id).collect();
 
         assert_eq!(ids, vec!["ticket-mcp", "log-viewer"]);
@@ -164,7 +216,10 @@ mod tests {
         };
 
         let entry = build_server_entry(&artifact).unwrap();
-        assert_eq!(entry["args"], serde_json::json!(["--", "log-viewer", "--mcp"]));
+        assert_eq!(
+            entry["args"],
+            serde_json::json!(["--", "log-viewer", "--mcp"])
+        );
     }
 
     #[test]
@@ -179,22 +234,32 @@ mod tests {
     "existing": { "type": "stdio", "command": "echo", "args": ["hello"] }
   }
 }"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut selected = BTreeMap::new();
-        selected.insert("ticket-mcp".to_string(), build_server_entry(&Artifact {
-            id: "ticket-mcp".into(),
-            category: "mcp".into(),
-            kind: crate::registry::ArtifactKind::RustBinary,
-            path: "ticket".into(),
-            bin: Some("ticket-mcp".into()),
-            features: vec!["mcp".into()],
-            npm_script: None,
-            extension_id: None,
-        }).unwrap());
+        selected.insert(
+            "ticket-mcp".to_string(),
+            build_server_entry(&Artifact {
+                id: "ticket-mcp".into(),
+                category: "mcp".into(),
+                kind: crate::registry::ArtifactKind::RustBinary,
+                path: "ticket".into(),
+                bin: Some("ticket-mcp".into()),
+                features: vec!["mcp".into()],
+                npm_script: None,
+                extension_id: None,
+            })
+            .unwrap(),
+        );
 
-        let mut existing: serde_json::Value = serde_json::from_str(&fs::read_to_string(config_path.join("mcp.json")).unwrap()).unwrap();
-        let servers = existing.get_mut("servers").and_then(|v| v.as_object_mut()).unwrap();
+        let mut existing: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(config_path.join("mcp.json")).unwrap())
+                .unwrap();
+        let servers = existing
+            .get_mut("servers")
+            .and_then(|v| v.as_object_mut())
+            .unwrap();
         for (id, entry) in selected {
             servers.insert(id.clone(), entry.clone());
         }
