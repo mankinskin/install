@@ -10,15 +10,11 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
 
-base_image=${RUST_BASE_IMAGE:-rust:1.91-bookworm}
-tag=${DOCKER_IMAGE_TAG:-workflow-tools-guidance-fixtures-validation}
+# shellcheck source=../validation-lib.sh
+source "$repo_root/install/validation-lib.sh"
 
-echo "[docker-build] Building $tag"
-docker build \
-    --build-arg "RUST_BASE_IMAGE=$base_image" \
-    -f "$script_dir/Dockerfile" \
-    -t "$tag" \
-    "$repo_root"
+tag=workflow-tools-guidance-fixtures-validation
+docker_validation_build "$script_dir/Dockerfile" "$tag" "$repo_root"
 
 echo "[docker-run] Running $tag (deterministic guidance fixture contract)"
-docker run --rm --entrypoint bash "$tag" install/docker-validation/run-guidance-fixtures.sh
+docker run --rm --entrypoint bash "${DOCKER_IMAGE_TAG:-$tag}" install/docker-validation/run-guidance-fixtures.sh

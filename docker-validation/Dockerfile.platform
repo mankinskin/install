@@ -1,0 +1,12 @@
+# syntax=docker/dockerfile:1
+ARG RUST_BASE_IMAGE=rust:1.91-bookworm
+FROM ${RUST_BASE_IMAGE}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+WORKDIR /source
+COPY . /source
+ENTRYPOINT ["bash", "/source/workflow-tools/install/docker-validation/run-platform-suite.sh"]

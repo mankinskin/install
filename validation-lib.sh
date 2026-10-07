@@ -8,7 +8,7 @@ set -euo pipefail
 # Builds and runs a validation image using the common RUST_BASE_IMAGE
 # build-arg and DOCKER_IMAGE_TAG override convention shared by every
 # workflow-tools Docker validation container.
-docker_validation_build_and_run() {
+docker_validation_build() {
     local dockerfile=$1
     local default_tag=$2
     local context_dir=$3
@@ -25,6 +25,18 @@ docker_validation_build_and_run() {
         -t "$tag" \
         "$context_dir"
 
+}
+
+docker_validation_run() {
+    local default_tag=$1
+    shift
+    local tag=${DOCKER_IMAGE_TAG:-$default_tag}
     echo "[docker-run] Running $tag"
-    docker run --rm "$tag"
+    docker run --rm "$@" "$tag"
+}
+
+docker_validation_build_and_run() {
+    local default_tag=$2
+    docker_validation_build "$@"
+    docker_validation_run "$default_tag"
 }
