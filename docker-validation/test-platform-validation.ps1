@@ -69,6 +69,22 @@ Assert-Contract ((Get-ValidationOwnerIdentity $fixtureSource $fixtureGraph 'owne
 $fixtureSource.files[1].hash = 'dependency-change'
 Assert-Contract ((Get-ValidationOwnerIdentity $fixtureSource $fixtureGraph 'owner' 'recipe').digest -cne $identity.digest) 'reachable dependency invalidates evidence'
 Assert-Rejected { Get-ValidationOwnerIdentity $fixtureSource $fixtureGraph 'missing' 'recipe' } 'missing resolved owner'
+$fixtureGraph = [pscustomobject]$fixtureGraph
+$fixtureGraph | Add-Member -NotePropertyName workspace_root -NotePropertyValue '/source'
+foreach ($dependency in $fixtureGraph.packages) { $dependency | Add-Member -NotePropertyName version -NotePropertyValue '1.0.0' }
+$fixtureSource.files += [pscustomobject]@{
+    path = 'Cargo.lock'; hash = 'lock'
+    cargo_packages = @(
+        [pscustomobject]@{ name = 'owner'; version = '1.0.0'; hash = 'owner-lock' }
+        [pscustomobject]@{ name = 'dependency'; version = '1.0.0'; hash = 'dependency-lock' }
+        [pscustomobject]@{ name = 'unrelated'; version = '1.0.0'; hash = 'unrelated-lock' }
+    )
+}
+$lockIdentity = Get-ValidationOwnerIdentity $fixtureSource $fixtureGraph 'owner' 'recipe'
+$fixtureSource.files[3].cargo_packages[2].hash = 'unrelated-lock-change'
+Assert-Contract ((Get-ValidationOwnerIdentity $fixtureSource $fixtureGraph 'owner' 'recipe').digest -ceq $lockIdentity.digest) 'unrelated lock section leaves owner evidence valid'
+$fixtureSource.files[3].cargo_packages[1].hash = 'dependency-lock-change'
+Assert-Contract ((Get-ValidationOwnerIdentity $fixtureSource $fixtureGraph 'owner' 'recipe').digest -cne $lockIdentity.digest) 'dependency lock section invalidates owner evidence'
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ("validation-contract-" + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($scratch) | Out-Null
 try {

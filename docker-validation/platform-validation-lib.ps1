@@ -192,7 +192,8 @@ function Convert-ValidationSizeToBytes {
 function Get-ValidationRecipeHash {
     param($Source)
     $inputs = @($Source.files | Where-Object {
-        $_.path -match '^workflow-tools/install/(docker-validation/|viewer-validation/|validation-lib\.sh$)'
+        $_.path -match '^workflow-tools/install/(docker-validation/|viewer-validation/|validation-lib\.sh$)' -and
+        $_.path -notmatch '\.md$'
     } | ForEach-Object { "$($_.path)`t$($_.hash)" })
     return Get-ValidationTextHash ($inputs -join "`n")
 }
@@ -223,8 +224,9 @@ function Get-ValidationOwnerIdentity {
     })
     if ($CargoMetadata.PSObject.Properties.Name -contains 'workspace_root') {
         $workspaceRoot = $CargoMetadata.workspace_root
-        if (-not $workspaceRoot.StartsWith('/source/')) { throw 'Cargo workspace is outside copied source.' }
-        $relativeWorkspace = $workspaceRoot.Substring(8) + '/'
+        if ($workspaceRoot -ceq '/source') { $relativeWorkspace = '' }
+        elseif ($workspaceRoot.StartsWith('/source/')) { $relativeWorkspace = $workspaceRoot.Substring(8) + '/' }
+        else { throw 'Cargo workspace is outside copied source.' }
         $ownerFiles += @($Source.files | Where-Object {
             $_.path -ceq ($relativeWorkspace + 'Cargo.toml') -or
             $_.path.StartsWith($relativeWorkspace + '.cargo/', [StringComparison]::Ordinal) -or

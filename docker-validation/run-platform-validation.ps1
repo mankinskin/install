@@ -123,7 +123,15 @@ Invoke-ValidationNative docker @('pull', $baseImage) | Out-Host
 $baseInfo = ((Invoke-ValidationNative docker @('image', 'inspect', $baseImage)) -join "`n") | ConvertFrom-Json
 if (-not $baseInfo[0].RepoDigests.Count) { throw 'Base image has no immutable repository digest.' }
 $baseDigest = $baseInfo[0].RepoDigests[0]
-$recipeDigest = Get-ValidationTextHash "linux`n$Suite`n$baseDigest`n$recipeFileHash"
+$nodeDigest = ''
+if ($Suite -eq 'viewer') {
+    $nodeImage = if ($env:NODE_BASE_IMAGE) { $env:NODE_BASE_IMAGE } else { 'node:20-bookworm-slim' }
+    Invoke-ValidationNative docker @('pull', $nodeImage) | Out-Host
+    $nodeInfo = ((Invoke-ValidationNative docker @('image', 'inspect', $nodeImage)) -join "`n") | ConvertFrom-Json
+    if (-not $nodeInfo[0].RepoDigests.Count) { throw 'Node base image has no immutable repository digest.' }
+    $nodeDigest = $nodeInfo[0].RepoDigests[0]
+}
+$recipeDigest = Get-ValidationTextHash "linux`n$Suite`n$baseDigest`n$nodeDigest`n$recipeFileHash"
 $source.recipe_digest = $recipeDigest
 if ($metadataPath -and -not $WriteMetadata -and $recorded.recipe_digest -cne $recipeDigest) {
     throw 'Build recipe/base-image metadata mismatch.'
@@ -132,6 +140,7 @@ $tagDigest = Get-ValidationTextHash "$recipeDigest`n$($source.source_digest)"
 $tag = if ($env:DOCKER_IMAGE_TAG) { $env:DOCKER_IMAGE_TAG } else { "workflow-platform:$($tagDigest.Substring(0, 24))" }
 $receipt.source = $source
 $receipt.base_image = $baseDigest
+$receipt.node_base_image = $nodeDigest
 
     New-ValidationContext $Root $context $source
     $dockerfile = Join-Path $context 'workflow-tools\install\docker-validation\Dockerfile.platform'
@@ -139,10 +148,9 @@ $receipt.base_image = $baseDigest
         '--label', "org.workflow-tools.source=$($source.source_digest)",
         '--build-arg', "RUST_BASE_IMAGE=$baseDigest", '-f', $dockerfile, '-t', $tag, $context)
     if ($Suite -eq 'viewer') {
-        $nodeImage = if ($env:NODE_BASE_IMAGE) { $env:NODE_BASE_IMAGE } else { 'node:20-bookworm-slim' }
         $buildArgs = @('buildx', 'build', '--builder', $builder, '--load', '--label', 'org.workflow-tools.validation=platform',
             '--label', "org.workflow-tools.source=$($source.source_digest)",
-            '--build-arg', "RUST_BASE_IMAGE=$baseDigest", '--build-arg', "NODE_BASE_IMAGE=$nodeImage",
+            '--build-arg', "RUST_BASE_IMAGE=$baseDigest", '--build-arg', "NODE_BASE_IMAGE=$nodeDigest",
             '-f', (Join-Path $context 'workflow-tools\install\viewer-validation\Dockerfile'), '-t', $tag,
             (Join-Path $context 'workflow-tools'))
     }
