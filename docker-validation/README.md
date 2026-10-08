@@ -14,9 +14,9 @@ The host invokes Docker, never host Cargo. The Linux image includes the complete
 allowlisted recursive source tree, including sibling Cargo patches. Its default
 network-smoke entry point is not used for Cargo tests.
 
-Suites currently implemented: `cargo`, `harness-contract`, `install-smoke`,
-`guidance-fixtures`, and `viewer`. Inventory-ledger and standalone-consumer
-adapters are added by their prerequisite work packages. Windows and engine
+Suites currently implemented: `cargo`, `ledger`, `harness-contract`, `install-smoke`,
+`guidance-fixtures`, and `viewer`. The standalone-consumer
+adapter is added by its prerequisite work package. Windows and engine
 switching fail explicitly until the terminal Windows adapter exists.
 
 Cargo selectors are `all` (no test filter), `guidance`, and
@@ -66,3 +66,22 @@ and copied context size, bounded by the 120-GiB campaign ceiling. Insufficient
 capacity fails with an operator handoff; the driver never prunes unrelated data.
 The driver refuses a second campaign container and does not switch engines.
 Existing unrelated containers are not stopped.
+
+## Inventory and ledger suites
+
+Create the initial pending census without claiming any classification:
+
+```powershell
+& $driver -Platform linux -Root (Get-Location).Path -Suite ledger `
+  -Ledger path-rendering-occurrences.toml -LedgerSelector inventory-generate `
+  -Stage inventory -Metadata path-rendering-source.json -WriteMetadata
+```
+
+Generation refuses to overwrite a ledger. Subsequent runs use exact emitted
+`batch:<group>:<nnn>` selectors or the stage-specific aggregate selectors
+documented in [the inventory package](../../path-render-inventory/README.md).
+The ledger and earlier receipts are separate attested inputs, not image/source
+hash inputs. `-RunSelectedTests`, `-CheckLedger` and `-VerifyComplete` retain their
+distinct roles; complete gates fail on unresolved classification or stale owning
+platform proofs. Windows batches check their requested platform; the terminal
+both-platform aggregate is what requires the complete paired proof set.

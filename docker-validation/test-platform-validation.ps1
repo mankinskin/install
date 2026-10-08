@@ -92,6 +92,15 @@ try {
     [IO.File]::WriteAllText($shellFile, "first`r`nsecond`r`n", [Text.UTF8Encoding]::new($false))
     Assert-Contract ([Text.Encoding]::UTF8.GetString((Get-ValidationCopyBytes $shellFile)) -ceq "first`nsecond`n") 'copied Bash uses LF'
     Assert-Rejected { Resolve-ValidationInput $scratch '..\outside.rs' } 'workspace traversal rejected'
+    $arrayFile = Join-Path $scratch 'array.json'
+    [IO.File]::WriteAllText($arrayFile, '[{"selector":"first"},{"selector":"second"}]')
+    $rows = @(Read-ValidationJsonArray $arrayFile)
+    Assert-Contract ($rows.Count -eq 2 -and $rows[0].selector -ceq 'first') 'JSON root arrays are not boxed in receipts'
+    [IO.File]::WriteAllText($arrayFile, '[]')
+    Assert-Contract (@(Read-ValidationJsonArray $arrayFile).Count -eq 0) 'empty JSON array stays empty'
+    [IO.File]::WriteAllText($arrayFile, '{"selector":"not-array"}')
+    Assert-Rejected { Read-ValidationJsonArray $arrayFile } 'JSON object is not a batch array'
+    Remove-Item -LiteralPath $arrayFile
 } finally {
     Remove-Item -LiteralPath (Join-Path $scratch 'fixture.sh')
     Remove-Item -LiteralPath $scratch

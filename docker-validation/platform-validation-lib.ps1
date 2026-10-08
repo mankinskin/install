@@ -1,5 +1,13 @@
 Set-StrictMode -Version Latest
 
+function Read-ValidationJsonArray {
+    param([string]$Path)
+    $text = Get-Content -Raw -LiteralPath $Path
+    if (-not $text.TrimStart().StartsWith('[')) { throw "Expected JSON array: $Path" }
+    $rows = $text | ConvertFrom-Json
+    $rows | ForEach-Object { $_ }
+}
+
 function Invoke-ValidationNative {
     param([string]$Program, [string[]]$Arguments)
     $output = & $Program @Arguments
@@ -103,13 +111,13 @@ function Get-ValidationSource {
             foreach ($path in $paths) {
                 $relative = if ($repository) { "$repository/$path" } else { $path }
                 if (-not (Test-ValidationSourcePath $relative $isUntracked)) {
-                    $excluded.Add([ordered]@{ path = $relative; reason = 'source-allowlist' })
+                    $excluded.Add([ordered]@{ path = $relative; reason = 'source-allowlist'; repository = $repository })
                     continue
                 }
                 $full = [IO.Path]::GetFullPath((Join-Path $Root $relative))
                 if (Test-Path -LiteralPath $full -PathType Container) { continue }
                 if (-not (Test-Path -LiteralPath $full)) {
-                    $excluded.Add([ordered]@{ path = $relative; reason = 'deleted-working-file' })
+                    $excluded.Add([ordered]@{ path = $relative; reason = 'deleted-working-file'; repository = $repository })
                     continue
                 }
                 $full = Resolve-ValidationInput $Root $relative
@@ -130,12 +138,12 @@ function Get-ValidationSource {
                 $entries.Add([pscustomobject][ordered]@{
                     path = $relative.Replace('\', '/'); hash = Get-ValidationHash $bytes
                     working_hash = Get-ValidationHash ([IO.File]::ReadAllBytes($full))
-                    bytes = $bytes.Length; untracked = $isUntracked; cargo_packages = $cargoPackages
+                    bytes = $bytes.Length; untracked = $isUntracked; cargo_packages = $cargoPackages; repository = $repository
                 })
             }
         }
     }
-    $entries = @($entries | Sort-Object path -Unique)
+    $entries = @($entries | Sort-Object path -Unique -CaseSensitive)
     $description = ($entries | ForEach-Object { "$($_.path)`t$($_.hash)" }) -join "`n"
     $workingDescription = ($entries | ForEach-Object { "$($_.path)`t$($_.working_hash)" }) -join "`n"
     return [ordered]@{
@@ -192,7 +200,7 @@ function Convert-ValidationSizeToBytes {
 function Get-ValidationRecipeHash {
     param($Source)
     $inputs = @($Source.files | Where-Object {
-        $_.path -match '^workflow-tools/install/(docker-validation/|viewer-validation/|validation-lib\.sh$)' -and
+        $_.path -match '^workflow-tools/(install/(docker-validation/|viewer-validation/|validation-lib\.sh$)|path-render-inventory/)' -and
         $_.path -notmatch '\.md$'
     } | ForEach-Object { "$($_.path)`t$($_.hash)" })
     return Get-ValidationTextHash ($inputs -join "`n")

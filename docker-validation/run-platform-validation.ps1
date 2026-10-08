@@ -23,7 +23,9 @@ $receiptPath = Join-Path $receiptDirectory "$workId.json"
 $receipt = [ordered]@{
     schema = 1; suite = $Suite; platform = $Platform; status = 'started'
     source = $null; commands = @(); image = $null; base_image = $null
-    selector = $TestSelector; owner = $Manifest; owner_identity = $null
+    selector = $(if ($Suite -eq 'ledger') { $LedgerSelector } else { $TestSelector })
+    stage = $(if ($Suite -eq 'ledger') { $Stage } else { $null })
+    owner = $Manifest; owner_identity = $null
     started_at = (Get-Date).ToUniversalTime().ToString('o')
 }
 $lock = $null
@@ -33,11 +35,26 @@ try {
         [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 if ($Platform -ne 'linux') { throw 'Windows adapter is not implemented yet; no Linux fallback is permitted.' }
 if ($AllowEngineSwitch) { throw 'Engine switching belongs to the terminal Windows adapter, not the Linux bootstrap.' }
-if ($Suite -in @('ledger', 'standalone-consumer')) {
+if ($Suite -eq 'standalone-consumer') {
     throw "$Suite adapter is not implemented yet; its prerequisite waypoint must complete first."
 }
-if ($Ledger -or $LedgerSelector -or $RunSelectedTests -or $CheckLedger -or $VerifyComplete) {
+if ($Suite -ne 'ledger' -and ($Ledger -or $LedgerSelector -or $RunSelectedTests -or $CheckLedger -or $VerifyComplete)) {
     throw 'Ledger options are valid only for the ledger suite; bootstrap does not require a ledger.'
+}
+$ledgerPath = $null
+$ledgerHash = $null
+if ($Suite -eq 'ledger') {
+    if (-not $Ledger -or -not $LedgerSelector) { throw 'Ledger suite requires -Ledger and -LedgerSelector.' }
+    if ($LedgerSelector -eq 'inventory-generate') {
+        if ($Stage -ne 'inventory' -or $RunSelectedTests -or $CheckLedger -or $VerifyComplete) {
+            throw 'Inventory generation is a separate inventory-stage operation, not a classification/completion gate.'
+        }
+        $ledgerPath = Resolve-ValidationOutput $Root $Ledger
+        if (Test-Path -LiteralPath $ledgerPath) { throw 'Inventory generation never overwrites an existing ledger.' }
+    } else {
+        $ledgerPath = Resolve-ValidationInput $Root $Ledger
+        $ledgerHash = Get-ValidationHash ([IO.File]::ReadAllBytes($ledgerPath))
+    }
 }
 
 $cargoArguments = @()
@@ -74,6 +91,14 @@ if ($metadataPath -and -not $WriteMetadata) {
     if (-not (Test-Path -LiteralPath $metadataPath)) { throw 'Missing metadata; first run requires -WriteMetadata.' }
     $recorded = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
     Assert-ValidationMetadata $recorded $source
+    if ($Suite -eq 'ledger' -and $ledgerHash) {
+        $key = "$Stage/$LedgerSelector"
+        if ($recorded.PSObject.Properties.Name -notcontains 'ledger_attestations' -or
+            $null -eq $recorded.ledger_attestations.PSObject.Properties[$key]) {
+            throw 'Missing ledger/selector attestation; refresh with -WriteMetadata.'
+        }
+        Assert-ValidationSelection $recorded.ledger_attestations.PSObject.Properties[$key].Value.ledger_digest $ledgerHash $key
+    }
 }
 
 $contextBytes = [long](($source.files | Measure-Object -Property bytes -Sum).Sum)
@@ -131,8 +156,19 @@ if ($Suite -eq 'viewer') {
     if (-not $nodeInfo[0].RepoDigests.Count) { throw 'Node base image has no immutable repository digest.' }
     $nodeDigest = $nodeInfo[0].RepoDigests[0]
 }
-$recipeDigest = Get-ValidationTextHash "linux`n$Suite`n$baseDigest`n$nodeDigest`n$recipeFileHash"
+$recipeDigest = Get-ValidationTextHash "linux`n$baseDigest`n$nodeDigest`n$recipeFileHash"
 $source.recipe_digest = $recipeDigest
+$source.recipe_source_digest = $recipeFileHash
+$source.recipe_digests = [ordered]@{ linux = $recipeDigest }
+if ($metadataPath -and (Test-Path -LiteralPath $metadataPath)) {
+    $previousSource = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
+    if ($previousSource.PSObject.Properties.Name -contains 'recipe_source_digest' -and
+        $previousSource.recipe_source_digest -ceq $recipeFileHash -and
+        $previousSource.PSObject.Properties.Name -contains 'recipe_digests' -and
+        $previousSource.recipe_digests.PSObject.Properties.Name -contains 'windows') {
+        $source.recipe_digests.windows = $previousSource.recipe_digests.windows
+    }
+}
 if ($metadataPath -and -not $WriteMetadata -and $recorded.recipe_digest -cne $recipeDigest) {
     throw 'Build recipe/base-image metadata mismatch.'
 }
@@ -164,12 +200,29 @@ $receipt.node_base_image = $nodeDigest
         '--label', 'org.workflow-tools.validation=platform', '--entrypoint', 'bash')
     $results = Join-Path $work 'results'
     [IO.Directory]::CreateDirectory($results) | Out-Null
+    if ($Suite -eq 'ledger') {
+        Write-ValidationJson (Join-Path $results 'source.json') $source
+        if ($ledgerHash) { [IO.File]::Copy($ledgerPath, (Join-Path $results 'ledger.toml')) }
+        $pastReceipts = Join-Path $results 'receipts'
+        [IO.Directory]::CreateDirectory($pastReceipts) | Out-Null
+        foreach ($past in Get-ChildItem -LiteralPath $receiptDirectory -Filter '*.json' -File) {
+            $pastPath = Resolve-ValidationInput $Root $past.FullName.Substring($Root.Length + 1)
+            [IO.File]::Copy($pastPath, (Join-Path $pastReceipts $past.Name))
+        }
+    }
     $runArgs += @('--mount', "type=bind,source=$results,target=/validation-results")
+    $runArgs += @('--env', 'WORKFLOW_VALIDATION_CONTAINER=platform')
     if ($Suite -eq 'viewer') {
         $runArgs += @($imageDigest, 'install/viewer-validation/run-in-container.sh')
     } else {
         $runArgs += @($imageDigest, '/source/workflow-tools/install/docker-validation/run-platform-suite.sh', $Suite)
         $runArgs += $cargoArguments
+        if ($Suite -eq 'ledger') {
+            $runArgs += @($LedgerSelector, $Stage, $Platform)
+            if ($RunSelectedTests) { $runArgs += '--run-selected-tests' }
+            if ($CheckLedger) { $runArgs += '--check-ledger' }
+            if ($VerifyComplete) { $runArgs += '--verify-complete' }
+        }
     }
     $receipt.commands += ,(@('docker') + $runArgs)
     Invoke-ValidationNative docker $runArgs | Out-Host
@@ -182,6 +235,81 @@ $receipt.node_base_image = $nodeDigest
     if ($Suite -eq 'cargo') {
         $afterOwner = Get-ValidationOwnerIdentity $after $cargoMetadata $Package $recipeDigest
         if ($afterOwner.digest -cne $receipt.owner_identity.digest) { throw 'Selected owner or dependency changed during the run.' }
+    } elseif ($Suite -eq 'ledger') {
+        if ($LedgerSelector -eq 'inventory-generate') {
+            Assert-ValidationMetadata $source $after
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $ledgerPath)) | Out-Null
+            [IO.File]::Copy((Join-Path $results 'ledger.toml'), $ledgerPath)
+            $receipt.selector_digest = Get-ValidationHash ([IO.File]::ReadAllBytes($ledgerPath))
+            $receipt.inventory = [ordered]@{
+                ledger = $Ledger
+                batches = @(Read-ValidationJsonArray (Join-Path $results 'batches.json'))
+            }
+        } else {
+            if ((Get-ValidationHash ([IO.File]::ReadAllBytes($ledgerPath))) -cne $ledgerHash) { throw 'Ledger changed during validation.' }
+            $selected = Get-Content -Raw -LiteralPath (Join-Path $results 'selection.json') | ConvertFrom-Json
+            if ($metadataPath -and -not $WriteMetadata) {
+                Assert-ValidationSelection $recorded.ledger_attestations.PSObject.Properties["$Stage/$LedgerSelector"].Value.selector_digest $selected.selection.digest $LedgerSelector
+            }
+            $receipt.selector_digest = $selected.selection.digest
+            $receipt.selection = $selected.selection
+            $receipt.ledger_digest = $ledgerHash
+            $source.ledger_attestations = [ordered]@{}
+            if ($metadataPath -and (Test-Path -LiteralPath $metadataPath)) {
+                $oldMetadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
+                if ($oldMetadata.PSObject.Properties.Name -contains 'ledger_attestations') {
+                    foreach ($property in $oldMetadata.ledger_attestations.PSObject.Properties) {
+                        $source.ledger_attestations[$property.Name] = $property.Value
+                    }
+                }
+            }
+            $source.ledger_attestations["$Stage/$LedgerSelector"] = [ordered]@{
+                ledger_digest = $ledgerHash; selector_digest = $selected.selection.digest
+            }
+            $receipt.owner_proofs = @()
+            foreach ($ownerRun in $selected.owners) {
+                $graphFile = Resolve-ValidationInput $results $ownerRun.metadata_file
+                $graph = Get-Content -Raw -LiteralPath $graphFile | ConvertFrom-Json
+                $ownerPackage = $ownerRun.proof.test_args[[array]::IndexOf($ownerRun.proof.test_args, '-p') + 1]
+                $beforeOwner = Get-ValidationOwnerIdentity $source $graph $ownerPackage $recipeDigest
+                $afterOwner = Get-ValidationOwnerIdentity $after $graph $ownerPackage $recipeDigest
+                if ($beforeOwner.digest -cne $afterOwner.digest) { throw "Ledger owner changed during validation: $ownerPackage" }
+                $receipt.owner_proofs += $ownerRun.proof
+            }
+            foreach ($inputFile in $selected.selection.file_sources) {
+                if ($inputFile.hash) {
+                    $current = @($after.files | Where-Object { $_.path -ceq $inputFile.path })
+                    if ($current.Count -ne 1 -or $current[0].hash -cne $inputFile.hash) {
+                        throw "Selected ledger source changed during validation: $($inputFile.path)"
+                    }
+                }
+                foreach ($repository in $selected.selection.repository_paths) {
+                    $oldPaths = @($source.files + $source.exclusions | Where-Object {
+                        $_.repository -ceq $repository -and $_.path -like '*.rs'
+                    } | ForEach-Object { $_.path } | Sort-Object -CaseSensitive)
+                    $newPaths = @($after.files + $after.exclusions | Where-Object {
+                        $_.repository -ceq $repository -and $_.path -like '*.rs'
+                    } | ForEach-Object { $_.path } | Sort-Object -CaseSensitive)
+                    if (($oldPaths -join "`n") -cne ($newPaths -join "`n")) { throw "Selected repository census changed: $repository" }
+                }
+                if ($Stage -eq 'final') {
+                    if (-not $selected.publication_revision) { throw 'Final stage has no published renderer revision.' }
+                    Invoke-ValidationNative git @('-C', (Join-Path $Root 'workflow-tools'),
+                        'cat-file', '-e', "$($selected.publication_revision):path-render/Cargo.toml") | Out-Null
+                    Invoke-ValidationNative git @('-C', (Join-Path $Root 'workflow-tools'),
+                        'diff', '--quiet', $selected.publication_revision, '--', 'path-render') | Out-Null
+                    if (@($after.files | Where-Object { $_.untracked -and $_.path.StartsWith('workflow-tools/path-render/') }).Count) {
+                        throw 'Unpublished renderer source is present; repeat the publication checkpoint.'
+                    }
+                }
+            }
+            if ($selected.selection.aggregate) {
+                $oldCensus = @($source.files.path + $source.exclusions.path | Where-Object { $_ -like '*.rs' } | Sort-Object -Unique -CaseSensitive)
+                $newCensus = @($after.files.path + $after.exclusions.path | Where-Object { $_ -like '*.rs' } | Sort-Object -Unique -CaseSensitive)
+                if (($oldCensus -join "`n") -cne ($newCensus -join "`n")) { throw 'Rust census changed during aggregate validation.' }
+            }
+            if (-not $RunSelectedTests) { Assert-ValidationMetadata $source $after }
+        }
     } elseif ($Suite -ne 'harness-contract') {
         Assert-ValidationMetadata $source $after
     }
