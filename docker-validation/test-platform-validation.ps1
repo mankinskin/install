@@ -101,8 +101,66 @@ try {
     [IO.File]::WriteAllText($arrayFile, '{"selector":"not-array"}')
     Assert-Rejected { Read-ValidationJsonArray $arrayFile } 'JSON object is not a batch array'
     Remove-Item -LiteralPath $arrayFile
+
+    $transactionRoot = Join-Path $scratch 'transaction-fixture'
+    [IO.Directory]::CreateDirectory($transactionRoot) | Out-Null
+    $oldA = Join-Path $transactionRoot 'a.txt'
+    $oldB = Join-Path $transactionRoot 'b.txt'
+    $newA = Join-Path $scratch 'a.next'
+    $newB = Join-Path $scratch 'b.next'
+    [IO.File]::WriteAllText($oldA, 'old-a')
+    [IO.File]::WriteAllText($oldB, 'old-b')
+    [IO.File]::WriteAllText($newA, 'new-a')
+    [IO.File]::WriteAllText($newB, 'new-b')
+    $transactionFiles = @(
+        [pscustomobject]@{ Source = $newA; Target = 'a.txt' }
+        [pscustomobject]@{ Source = $newB; Target = 'b.txt' }
+    )
+    Assert-Rejected {
+        Publish-ValidationTransaction $transactionRoot $transactionFiles 1
+    } 'failed multi-file publish is reported'
+    Assert-Contract ((Get-Content -Raw $oldA) -ceq 'old-a' -and
+        (Get-Content -Raw $oldB) -ceq 'old-b') 'failed publish restores every old target'
+    Assert-Contract (-not (Test-Path -LiteralPath (Join-Path $transactionRoot '.workflow-tools\validation\inventory\transaction.json'))) 'failed publish removes its recovered journal'
+    Publish-ValidationTransaction $transactionRoot $transactionFiles
+    Assert-Contract ((Get-Content -Raw $oldA) -ceq 'new-a' -and
+        (Get-Content -Raw $oldB) -ceq 'new-b') 'committed publish replaces every target'
+
+    [IO.File]::WriteAllText($oldA, 'old-a')
+    [IO.File]::WriteAllText($oldB, 'old-b')
+    $inventoryDirectory = Join-Path $transactionRoot '.workflow-tools\validation\inventory'
+    [IO.Directory]::CreateDirectory($inventoryDirectory) | Out-Null
+    $transactionId = [guid]::NewGuid().ToString('N')
+    $transactionDirectory = Join-Path $inventoryDirectory "transaction-$transactionId"
+    [IO.Directory]::CreateDirectory($transactionDirectory) | Out-Null
+    $stagedA = Join-Path $transactionDirectory 'new-0'
+    $stagedB = Join-Path $transactionDirectory 'new-1'
+    $backupA = Join-Path $transactionDirectory 'old-0'
+    $backupB = Join-Path $transactionDirectory 'old-1'
+    [IO.File]::WriteAllText($stagedA, 'next-a')
+    [IO.File]::WriteAllText($stagedB, 'next-b')
+    [IO.File]::Copy($oldA, $backupA)
+    [IO.File]::Copy($oldB, $backupB)
+    $journalEntries = @(
+        [ordered]@{
+            target = 'a.txt'; old_exists = $true; old_hash = Get-ValidationTransactionHash $oldA
+            new_hash = Get-ValidationTransactionHash $stagedA; temporary = 'new-0'; backup = 'old-0'
+        }
+        [ordered]@{
+            target = 'b.txt'; old_exists = $true; old_hash = Get-ValidationTransactionHash $oldB
+            new_hash = Get-ValidationTransactionHash $stagedB; temporary = 'new-1'; backup = 'old-1'
+        }
+    )
+    $journalPath = Join-Path $inventoryDirectory 'transaction.json'
+    Write-ValidationTransactionJournal $journalPath ([ordered]@{
+        schema = 1; id = $transactionId; committed = $false; entries = $journalEntries
+    })
+    Move-ValidationAtomic $stagedA $oldA
+    Recover-ValidationTransaction $transactionRoot
+    Assert-Contract ((Get-Content -Raw $oldA) -ceq 'old-a' -and
+        (Get-Content -Raw $oldB) -ceq 'old-b') 'restart recovery rolls back an interrupted replacement'
+    Assert-Contract (-not (Test-Path -LiteralPath $journalPath)) 'restart recovery removes the completed journal'
 } finally {
-    Remove-Item -LiteralPath (Join-Path $scratch 'fixture.sh')
-    Remove-Item -LiteralPath $scratch
+    Remove-Item -LiteralPath $scratch -Recurse -Force
 }
 Write-Host "Host harness contracts: $script:assertions passed"

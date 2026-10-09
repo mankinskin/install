@@ -31,10 +31,22 @@ case "$suite" in
         platform=${3:?ledger platform required}
         shift 3
         tool=(cargo run --locked --manifest-path workflow-tools/Cargo.toml -p path-render-inventory --)
+        export WORKFLOW_VALIDATION_RESULTS=/validation-results
         if [[ "$selector" == inventory-generate ]]; then
             "${tool[@]}" scan --root "$source_root" --source /validation-results/source.json --output /validation-results/ledger.toml
             "${tool[@]}" batches --ledger /validation-results/ledger.toml --stage inventory > /validation-results/batches.json
             exit 0
+        fi
+        if [[ "$selector" == inventory-reconcile ]]; then
+            "${tool[@]}" reconcile --root "$source_root" --source /validation-results/source.json \
+                --ledger /validation-results/ledger.toml --output /validation-results/candidate-ledger.toml \
+                --report /validation-results/reconciliation.json
+            exec "${tool[@]}" export --root "$source_root" --source /validation-results/source.json \
+                --ledger /validation-results/candidate-ledger.toml --output /validation-results/handoffs.json
+        fi
+        if [[ "$selector" == inventory-export ]]; then
+            exec "${tool[@]}" export --root "$source_root" --source /validation-results/source.json \
+                --ledger /validation-results/ledger.toml --output /validation-results/handoffs.json
         fi
         exec "${tool[@]}" validate --root "$source_root" --source /validation-results/source.json \
             --ledger /validation-results/ledger.toml --selector "$selector" --stage "$stage" \

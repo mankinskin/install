@@ -33,6 +33,7 @@ try {
     [IO.Directory]::CreateDirectory((Split-Path -Parent $receiptDirectory)) | Out-Null
     $lock = [IO.File]::Open((Join-Path (Split-Path -Parent $receiptDirectory) 'platform.lock'),
         [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    Recover-ValidationTransaction $Root
 if ($Platform -ne 'linux') { throw 'Windows adapter is not implemented yet; no Linux fallback is permitted.' }
 if ($AllowEngineSwitch) { throw 'Engine switching belongs to the terminal Windows adapter, not the Linux bootstrap.' }
 if ($Suite -eq 'standalone-consumer') {
@@ -45,6 +46,15 @@ $ledgerPath = $null
 $ledgerHash = $null
 if ($Suite -eq 'ledger') {
     if (-not $Ledger -or -not $LedgerSelector) { throw 'Ledger suite requires -Ledger and -LedgerSelector.' }
+    if ($LedgerSelector -in @('inventory-reconcile', 'inventory-export')) {
+        if ($Stage -ne 'inventory' -or -not $CheckLedger -or $RunSelectedTests -or $VerifyComplete) {
+            throw 'Inventory reconciliation/export requires inventory stage with -CheckLedger only.'
+        }
+        if ($Ledger -cne 'path-rendering-occurrences.toml' -or
+            $Metadata -cne 'path-rendering-source.json' -or -not $WriteMetadata) {
+            throw 'Inventory reconciliation/export requires the canonical ledger/source attestation and -WriteMetadata.'
+        }
+    }
     if ($LedgerSelector -eq 'inventory-generate') {
         if ($Stage -ne 'inventory' -or $RunSelectedTests -or $CheckLedger -or $VerifyComplete) {
             throw 'Inventory generation is a separate inventory-stage operation, not a classification/completion gate.'
@@ -236,7 +246,79 @@ $receipt.node_base_image = $nodeDigest
         $afterOwner = Get-ValidationOwnerIdentity $after $cargoMetadata $Package $recipeDigest
         if ($afterOwner.digest -cne $receipt.owner_identity.digest) { throw 'Selected owner or dependency changed during the run.' }
     } elseif ($Suite -eq 'ledger') {
-        if ($LedgerSelector -eq 'inventory-generate') {
+        if ($LedgerSelector -in @('inventory-reconcile', 'inventory-export')) {
+            if ((Get-ValidationHash ([IO.File]::ReadAllBytes($ledgerPath))) -cne $ledgerHash) {
+                throw 'Ledger changed during inventory reconciliation/export.'
+            }
+            Assert-ValidationMetadata $source $after
+            $candidateLedger = if ($LedgerSelector -eq 'inventory-reconcile') {
+                Join-Path $results 'candidate-ledger.toml'
+            } else {
+                $ledgerPath
+            }
+            if (-not (Test-Path -LiteralPath $candidateLedger -PathType Leaf)) {
+                throw 'Inventory transaction has no reconciled ledger candidate.'
+            }
+            $candidateLedgerHash = Get-ValidationHash ([IO.File]::ReadAllBytes($candidateLedger))
+            $handoffs = Get-Content -Raw -LiteralPath (Join-Path $results 'handoffs.json') | ConvertFrom-Json
+            $reconciliation = Get-Content -Raw -LiteralPath (Join-Path $results 'reconciliation.json') | ConvertFrom-Json
+            $candidates = Get-Content -Raw -LiteralPath (Join-Path $results 'candidates.json') | ConvertFrom-Json
+            if ($handoffs.schema -ne 1 -or $handoffs.current_stage -ne 'inventory' -or
+                $handoffs.ledger_digest -cne $candidateLedgerHash -or
+                $handoffs.source_digest -cne $source.source_digest -or
+                $reconciliation.ledger_digest -cne $candidateLedgerHash -or
+                $reconciliation.source_digest -cne $source.source_digest -or
+                $candidates.source_digest -cne $source.source_digest) {
+                throw 'Inventory report, candidate ledger, and copied source identities disagree.'
+            }
+            $stageFiles = @(
+                [pscustomobject]@{ name = 'inventory'; key = 'inventory'; file = 'batches-inventory.json'; rows = $handoffs.inventory }
+                [pscustomobject]@{ name = 'migration'; key = 'migration'; file = 'batches-migration.json'; rows = $handoffs.migration }
+                [pscustomobject]@{ name = 'final'; key = 'windows'; file = 'batches-windows.json'; rows = $handoffs.windows }
+            )
+            $source.ledger_attestations = [ordered]@{}
+            $source.ledger_digest = $candidateLedgerHash
+            foreach ($stageFile in $stageFiles) {
+                $batchPath = Join-Path $results $stageFile.file
+                $rows = @(Read-ValidationJsonArray $batchPath)
+                $expectedRows = @($stageFile.rows)
+                $actualJson = ConvertTo-Json -InputObject $rows -Depth 40 -Compress
+                $expectedJson = ConvertTo-Json -InputObject $expectedRows -Depth 40 -Compress
+                if ($actualJson -cne $expectedJson) {
+                    throw "Inventory batch list differs from its exact handoff selections: $($stageFile.name)"
+                }
+                foreach ($batch in $rows) {
+                    if (-not $batch.selector -or -not $batch.digest -or
+                        @($batch.file_ids).Count -gt 25 -or
+                        (@($batch.occurrence_ids).Count + @($batch.deletion_ids).Count) -gt 100) {
+                        throw "Invalid or over-cap handoff selection: $($batch.selector)"
+                    }
+                    $source.ledger_attestations["$($stageFile.name)/$($batch.selector)"] = [ordered]@{
+                        ledger_digest = $candidateLedgerHash
+                        selector_digest = $batch.digest
+                    }
+                }
+            }
+            $metadataCandidate = Join-Path $results 'metadata.json'
+            Write-ValidationJson $metadataCandidate $source
+            $transactionFiles = [Collections.Generic.List[object]]::new()
+            $transactionFiles.Add([pscustomobject]@{ Source = $candidateLedger; Target = $Ledger })
+            $transactionFiles.Add([pscustomobject]@{ Source = $metadataCandidate; Target = $Metadata })
+            foreach ($name in @(
+                'reconciliation.json', 'candidates.json', 'handoffs.json',
+                'batches-inventory.json', 'batches-migration.json', 'batches-windows.json'
+            )) {
+                $transactionFiles.Add([pscustomobject]@{
+                    Source = Join-Path $results $name
+                    Target = ".workflow-tools\validation\inventory\$name"
+                })
+            }
+            $receipt.selector_digest = $handoffs.selector_digest
+            $receipt.ledger_digest = $candidateLedgerHash
+            $receipt.selection = $handoffs
+            $receipt.invalidated_owner_ids = @($reconciliation.invalidated_owner_ids)
+            Publish-ValidationTransaction $Root @($transactionFiles)
+        } elseif ($LedgerSelector -eq 'inventory-generate') {
             Assert-ValidationMetadata $source $after
             [IO.Directory]::CreateDirectory((Split-Path -Parent $ledgerPath)) | Out-Null
             [IO.File]::Copy((Join-Path $results 'ledger.toml'), $ledgerPath)
@@ -314,7 +396,9 @@ $receipt.node_base_image = $nodeDigest
         Assert-ValidationMetadata $source $after
     }
     $receipt.status = 'passed'
-    if ($metadataPath) { Write-ValidationJson $metadataPath $source }
+    if ($metadataPath -and $LedgerSelector -notin @('inventory-reconcile', 'inventory-export')) {
+        Write-ValidationJson $metadataPath $source
+    }
 } catch {
     $receipt.status = 'failed'
     $receipt.error = $_.Exception.Message

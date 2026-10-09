@@ -12,7 +12,8 @@ function Invoke-ValidationNative {
     param([string]$Program, [string[]]$Arguments)
     $output = & $Program @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "$Program failed ($LASTEXITCODE): $($Arguments -join ' ')"
+        $details = ($output | Out-String).Trim()
+        throw "$Program failed ($LASTEXITCODE): $($Arguments -join ' ')`n$details"
     }
     return $output
 }
@@ -90,6 +91,154 @@ function Resolve-ValidationOutput {
     return $full
 }
 
+function Get-ValidationTransactionHash {
+    param([string]$Path)
+    return Get-ValidationHash ([IO.File]::ReadAllBytes($Path))
+}
+
+function Write-ValidationTransactionJournal {
+    param([string]$Path, $Journal)
+    $temporary = "$Path.pending"
+    [IO.File]::WriteAllText($temporary, ($Journal | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    if (Test-Path -LiteralPath $Path) {
+        $backup = "$Path.$([guid]::NewGuid().ToString('N')).replace-backup"
+        [IO.File]::Replace($temporary, $Path, $backup)
+        if (Test-Path -LiteralPath $backup) { [IO.File]::Delete($backup) }
+    } else {
+        [IO.File]::Move($temporary, $Path)
+    }
+}
+
+function Move-ValidationAtomic {
+    param([string]$Source, [string]$Destination)
+    if (Test-Path -LiteralPath $Destination) {
+        $backup = "$Destination.$([guid]::NewGuid().ToString('N')).replace-backup"
+        [IO.File]::Replace($Source, $Destination, $backup)
+        if (Test-Path -LiteralPath $backup) { [IO.File]::Delete($backup) }
+    } else {
+        [IO.File]::Move($Source, $Destination)
+    }
+}
+
+function Recover-ValidationTransaction {
+    param([string]$Root)
+    $inventory = Join-Path $Root '.workflow-tools\validation\inventory'
+    $journalPath = Join-Path $inventory 'transaction.json'
+    if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) { return }
+    $journal = Get-Content -Raw -LiteralPath $journalPath | ConvertFrom-Json
+    if ($journal.schema -ne 1 -or $journal.id -notmatch '^[0-9a-f]{32}$' -or
+        $null -eq $journal.entries) {
+        throw "Invalid inventory transaction journal: $journalPath"
+    }
+    $transaction = Join-Path $inventory "transaction-$($journal.id)"
+    if (-not $journal.committed) {
+        $entries = @($journal.entries)
+        [array]::Reverse($entries)
+        foreach ($entry in $entries) {
+            $target = Resolve-ValidationOutput $Root ([string]$entry.target)
+            $backup = Join-Path $transaction ([string]$entry.backup)
+            $exists = Test-Path -LiteralPath $target -PathType Leaf
+            $currentHash = if ($exists) { Get-ValidationTransactionHash $target } else { $null }
+            if ($entry.old_exists) {
+                if ($currentHash -ceq $entry.old_hash) { continue }
+                if ($currentHash -and $currentHash -cne $entry.new_hash) {
+                    throw "Cannot recover inventory transaction; target changed independently: $($entry.target)"
+                }
+                if (-not (Test-Path -LiteralPath $backup -PathType Leaf) -or
+                    (Get-ValidationTransactionHash $backup) -cne $entry.old_hash) {
+                    throw "Cannot recover inventory transaction; verified backup is missing: $($entry.target)"
+                }
+                $restore = Join-Path $transaction ("restore-" + [guid]::NewGuid().ToString('N'))
+                [IO.File]::Copy($backup, $restore)
+                Move-ValidationAtomic $restore $target
+            } elseif ($exists) {
+                if ($currentHash -cne $entry.new_hash) {
+                    throw "Cannot recover inventory transaction; new target changed independently: $($entry.target)"
+                }
+                [IO.File]::Delete($target)
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $transaction) { Remove-Item -LiteralPath $transaction -Recurse -Force }
+    Remove-Item -LiteralPath $journalPath -Force
+}
+
+function Publish-ValidationTransaction {
+    param(
+        [string]$Root,
+        [object[]]$Files,
+        [int]$FailureAfter = -1
+    )
+    $inventory = Join-Path $Root '.workflow-tools\validation\inventory'
+    [IO.Directory]::CreateDirectory($inventory) | Out-Null
+    $journalPath = Join-Path $inventory 'transaction.json'
+    if (Test-Path -LiteralPath $journalPath) {
+        throw 'An inventory transaction requires recovery before a new publication.'
+    }
+    $id = [guid]::NewGuid().ToString('N')
+    $transaction = Join-Path $inventory "transaction-$id"
+    [IO.Directory]::CreateDirectory($transaction) | Out-Null
+    $entries = [Collections.Generic.List[object]]::new()
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    try {
+        $index = 0
+        foreach ($file in $Files) {
+            $target = Resolve-ValidationOutput $Root ([string]$file.Target)
+            if (-not $seen.Add($target)) { throw "Duplicate inventory transaction target: $($file.Target)" }
+            if (-not (Test-Path -LiteralPath $file.Source -PathType Leaf)) {
+                throw "Inventory transaction source is missing: $($file.Source)"
+            }
+            $temporary = "new-$index"
+            $backup = "old-$index"
+            $staged = Join-Path $transaction $temporary
+            [IO.File]::Copy($file.Source, $staged)
+            $newHash = Get-ValidationTransactionHash $staged
+            $oldExists = Test-Path -LiteralPath $target -PathType Leaf
+            $oldHash = $null
+            if ($oldExists) {
+                $oldHash = Get-ValidationTransactionHash $target
+                $backupPath = Join-Path $transaction $backup
+                [IO.File]::Copy($target, $backupPath)
+                if ((Get-ValidationTransactionHash $backupPath) -cne $oldHash) {
+                    throw "Inventory transaction backup verification failed: $($file.Target)"
+                }
+            }
+            $entries.Add([ordered]@{
+                target = [string]$file.Target; old_exists = $oldExists
+                old_hash = $oldHash; new_hash = $newHash
+                temporary = $temporary; backup = $backup
+            })
+            $index++
+        }
+        $journal = [ordered]@{ schema = 1; id = $id; committed = $false; entries = @($entries) }
+        Write-ValidationTransactionJournal $journalPath $journal
+        $completed = 0
+        foreach ($entry in $entries) {
+            if ($FailureAfter -ge 0 -and $completed -eq $FailureAfter) {
+                throw 'Injected inventory publication failure.'
+            }
+            $target = Resolve-ValidationOutput $Root ([string]$entry.target)
+            $parent = Split-Path -Parent $target
+            [IO.Directory]::CreateDirectory($parent) | Out-Null
+            Move-ValidationAtomic (Join-Path $transaction $entry.temporary) $target
+            $completed++
+        }
+        if ($FailureAfter -ge 0 -and $completed -eq $FailureAfter) {
+            throw 'Injected inventory publication failure.'
+        }
+        $journal.committed = $true
+        Write-ValidationTransactionJournal $journalPath $journal
+        Recover-ValidationTransaction $Root
+    } catch {
+        if (Test-Path -LiteralPath $journalPath) {
+            Recover-ValidationTransaction $Root
+        } elseif (Test-Path -LiteralPath $transaction) {
+            Remove-Item -LiteralPath $transaction -Recurse -Force
+        }
+        throw
+    }
+}
+
 function Get-ValidationSource {
     param([string]$Root)
     $rootRevision = (Invoke-ValidationNative git @('-C', $Root, 'rev-parse', 'HEAD')).Trim()
@@ -128,9 +277,17 @@ function Get-ValidationSource {
                         $nameMatch = [regex]::Match($section, '(?m)^name = "([^"]+)"')
                         $versionMatch = [regex]::Match($section, '(?m)^version = "([^"]+)"')
                         if ($nameMatch.Success -and $versionMatch.Success) {
+                            $dependencies = @()
+                            $dependencyMatch = [regex]::Match($section, '(?ms)^dependencies = \[\s*(.*?)^\]')
+                            if ($dependencyMatch.Success) {
+                                $dependencies = @([regex]::Matches(
+                                    $dependencyMatch.Groups[1].Value,
+                                    '(?m)^\s*"([^"]+)"\s*,?\s*$'
+                                ) | ForEach-Object { $_.Groups[1].Value })
+                            }
                             $cargoPackages += [pscustomobject]@{
                                 name = $nameMatch.Groups[1].Value; version = $versionMatch.Groups[1].Value
-                                hash = Get-ValidationTextHash $section
+                                hash = Get-ValidationTextHash $section; dependencies = $dependencies
                             }
                         }
                     }
