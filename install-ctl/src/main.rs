@@ -8,6 +8,7 @@ pub mod installable;
 mod logging;
 mod paths;
 mod plan;
+mod prebuilt;
 mod process;
 mod registry;
 mod review_plan;
@@ -44,7 +45,6 @@ struct Cli {
     command: Option<Command>,
 }
 
-
 #[derive(Subcommand)]
 enum Command {
     /// Install one or more artifacts by id, category, or "all".
@@ -63,6 +63,20 @@ enum Command {
         /// Target installation root directory.
         #[arg(long)]
         root: Option<std::path::PathBuf>,
+    },
+    /// Install selected registry tools from a verified local prebuilt bundle.
+    PrebuiltInstall {
+        #[arg(required = true)]
+        selection: Vec<String>,
+        /// Directory containing the delivered binary blobs.
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Versioned JSON manifest whose SHA-256 values are the integrity authority.
+        #[arg(long)]
+        manifest: std::path::PathBuf,
+        /// Consumer installation home; binaries go below .workflow-tools/bin.
+        #[arg(long)]
+        home: std::path::PathBuf,
     },
     /// Uninstall one or more artifacts by id, category, or "all".
     Uninstall {
@@ -108,6 +122,15 @@ enum Command {
         /// Guidance target root (required with a profile).
         #[arg(long)]
         guidance_target: Option<std::path::PathBuf>,
+        /// Local delivered-binary directory used after TUI confirmation.
+        #[arg(long)]
+        prebuilt_bundle: Option<std::path::PathBuf>,
+        /// Versioned local bundle manifest used after TUI confirmation.
+        #[arg(long)]
+        prebuilt_manifest: Option<std::path::PathBuf>,
+        /// Consumer home; prebuilt bins install below .workflow-tools/bin.
+        #[arg(long)]
+        prebuilt_home: Option<std::path::PathBuf>,
     },
     /// Start a viewer server (alias for `viewer start`; kept top-level so
     /// existing `install-ctl start <viewer>` invocations, e.g. from
@@ -195,6 +218,29 @@ fn main() {
                 }
             }
         }
+        Some(Command::PrebuiltInstall {
+            selection,
+            bundle,
+            manifest,
+            home,
+        }) => {
+            let registry = match load_registry_v2() {
+                Ok(registry) => registry,
+                Err(error) => fail(&error),
+            };
+            let plan = InstallPlan::from_inventory(
+                &registry.entries,
+                &selection,
+                home.join(".workflow-tools"),
+                InstallOptions::default(),
+            )
+            .unwrap_or_else(|error| fail(&error));
+            let report = prebuilt::apply(&plan, &bundle, &manifest, &registry.entries, cli.dry_run);
+            print_apply_report(&report);
+            if report.has_failures() {
+                std::process::exit(1);
+            }
+        }
         Some(Command::Uninstall { selection, root }) => {
             let reg = match load_registry() {
                 Ok(reg) => reg,
@@ -253,6 +299,9 @@ fn main() {
             guidance_profiles,
             guidance_select,
             guidance_target,
+            prebuilt_bundle,
+            prebuilt_manifest,
+            prebuilt_home,
         }) => {
             // A confirmed TUI selection cannot be replayed after this point.
             // Shadow before rendering regardless of the initial root: review
@@ -263,6 +312,24 @@ fn main() {
                 Ok(reg) => reg,
                 Err(e) => fail(&e),
             };
+            let prebuilt = match (prebuilt_bundle, prebuilt_manifest, prebuilt_home) {
+                (None, None, None) => None,
+                (Some(bundle), Some(manifest), Some(home)) => Some((bundle, manifest, home)),
+                _ => fail(
+                    "--prebuilt-bundle, --prebuilt-manifest, and --prebuilt-home must be supplied together",
+                ),
+            };
+            let target_root = prebuilt
+                .as_ref()
+                .map(|(_, _, home)| home.join(".workflow-tools"))
+                .unwrap_or(target_root);
+            let source_label = prebuilt.as_ref().map(|(bundle, manifest, _)| {
+                format!(
+                    "local prebuilt bundle={} manifest={} (SHA-256; no Cargo)",
+                    bundle.display(),
+                    manifest.display()
+                )
+            });
             let guidance_inputs = if guidance_profiles.is_empty() {
                 if guidance_source.is_some()
                     || guidance_target.is_some()
@@ -296,7 +363,7 @@ fn main() {
                     .collect()
             };
             let destination_paths = guidance::destination::DestinationPaths::platform_default();
-            match tui::run(
+            match tui::run_with_source(
                 &reg.entries,
                 &guidance_inputs,
                 &destination_paths,
@@ -306,13 +373,19 @@ fn main() {
                     offline,
                     locked,
                 },
+                source_label.as_deref(),
             ) {
                 Ok(Some(review)) => {
                     // TUI self-replacement was handled before interaction.
                     // Do not replay its argv after confirmation: the root may
                     // have been edited since the pre-interaction check.
-                    let report =
-                        review_plan::apply_review_plan(&review, run_install_after_tui_review);
+                    let report = if let Some((bundle, manifest, _)) = prebuilt {
+                        review_plan::apply_review_plan(&review, |plan| {
+                            prebuilt::apply(plan, &bundle, &manifest, &reg.entries, cli.dry_run)
+                        })
+                    } else {
+                        review_plan::apply_review_plan(&review, run_install_after_tui_review)
+                    };
                     print_apply_report(&report);
                     if report.has_failures() {
                         std::process::exit(1);

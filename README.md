@@ -26,6 +26,60 @@ inventing a profile database: provide `--guidance-source`, one or more
 `--guidance-target <path>`. All four inputs are required when any profile is
 provided; destination scope remains the TOML profile policy.
 
+## Local prebuilt consumer bundles
+
+`prebuilt-install` installs delivered local binaries without compiling:
+`install-ctl prebuilt-install ticket --bundle <dir> --manifest <manifest.json> --home <home>`.
+Manifest version 1 contains `target` (`<os>-<arch>`) and `tools` entries with
+registry `id`, relative `path`, and SHA-256 `sha256`. The manifest is an
+integrity authority, not a signature. Verified blobs are retained at
+`<home>/.workflow-tools/cache/<sha256>` and copied to
+`<home>/.workflow-tools/bin/<registry-bin>`; later runs re-verify cache bytes.
+Wrong target, missing/escaping path, or source/cache digest mismatch fails
+without a Cargo fallback.
+
+Example manifest (replace the digest with the delivered file's real SHA-256):
+
+```json
+{
+  "version": 1,
+  "target": "windows-x86_64",
+  "tools": [
+    {"id": "ticket", "path": "ticket.exe", "sha256": "<64 hexadecimal characters>"}
+  ]
+}
+```
+
+Prepare a bundle by building the platform-specific tools once, copying the
+resulting binaries into a local directory, and recording their hashes in the
+manifest. On PowerShell, `Get-FileHash -Algorithm SHA256 <binary>` computes a
+digest. Keep the runtime registry available via `INSTALL_CTL_REPO_ROOT`.
+The manifest does not replace that registry or authorize arbitrary output
+filenames. The bundle must still be available for source verification on a
+later install; the cache avoids rewriting verified blobs, not source checks.
+
+For native interactive review:
+
+```powershell
+install-ctl tui --prebuilt-bundle C:\bundle `
+  --prebuilt-manifest C:\bundle\manifest.json --prebuilt-home C:\consumer
+```
+
+Supply all three prebuilt options together. Review shows the local source,
+manifest, selected tools, and initial installation root
+`C:\consumer\.workflow-tools`. The existing `r` editor changes that tools root;
+apply uses the edited root for both `bin` and `cache`, not the original flag.
+Source and manifest paths are supplied on launch, not edited inside the TUI.
+Cancellation performs no writes. Scripted `--dry-run prebuilt-install ...`
+verifies inputs without writing. Existing Cargo-mode flags remain unchanged.
+
+All selected source and existing cache hashes are checked before the first
+write. Apply uses atomic per-file replacement and reports completed, failed,
+and skipped actions; an I/O failure during apply is not a batch rollback.
+Identical installed bytes report `unchanged`. Scripted replacement of the
+currently executing installer is rejected; the TUI uses its existing Windows
+pre-interaction shadow mechanism. No release upload or HTTPS fetch is included.
+
 Scripted installation and confirmed TUI installation print a `result:` report
 after applying the reviewed selection. Each action includes its identifier,
 target, detail, and one of `written`, `unchanged`, `skipped`, or `failed`.

@@ -97,10 +97,11 @@ impl Drop for RestoreTerminal {
 
 /// Run the real terminal event/render loop. `None` is a successful
 /// cancellation and, importantly, is returned before the caller can apply.
-pub fn run(
+pub fn run_with_source(
     inventory: &[RegistryEntryV2], guidance_inputs: &[GuidanceInput], destination_paths: &DestinationPaths,
     target_root: std::path::PathBuf,
     options: InstallOptions,
+    source: Option<&str>,
 ) -> Result<Option<ReviewPlan>, String> {
     enable_raw_mode().map_err(|e| e.to_string())?;
     // Establish the guard before the second terminal operation: entering raw
@@ -153,9 +154,13 @@ pub fn run(
                 Screen::Review => {
                     let Some(review) = reviewed_plan.as_ref() else { return; };
                     let plan = &review.install;
-                    let mut lines = vec![ListItem::new(format!(
-                        "cargo options: force={} offline={} locked={}", plan.options.force, plan.options.offline, plan.options.locked
-                    ))];
+                    let mut lines = if let Some(source) = source {
+                        wrap_review_row("source: ", source, area.width)
+                    } else {
+                        vec![ListItem::new(format!(
+                            "cargo options: force={} offline={} locked={}", plan.options.force, plan.options.offline, plan.options.locked
+                        ))]
+                    };
                     lines.push(ListItem::new(format!(
                         "target installation root: {}",
                         plan.root.display()
