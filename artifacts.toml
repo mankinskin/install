@@ -18,6 +18,16 @@ safety = "approval-required"
 bin = "install-ctl"
 
 [[artifact]]
+id = "crane"
+category = "cli"
+kind = "rust-binary"
+source_path = "tools/cli/crane-cli"
+owner = "workflow-tools"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "crane"
+
+[[artifact]]
 id = "mcp-toolmon"
 category = "mcp"
 kind = "rust-binary"
@@ -295,4 +305,3 @@ owner = "tooling"
 lifecycle = ["inspect"]
 safety = "safe"
 bin = "session-capture-hook --from-hook-stdin"
-
