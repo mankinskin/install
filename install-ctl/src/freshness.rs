@@ -18,13 +18,6 @@ use sha2::{Digest, Sha256};
 
 /// Directory `cargo install` copies binaries into: `$CARGO_HOME/bin`,
 /// defaulting to `~/.cargo/bin` when `CARGO_HOME` is unset.
-fn cargo_bin_dir() -> Option<std::path::PathBuf> {
-    if let Ok(home) = std::env::var("CARGO_HOME") {
-        return Some(std::path::PathBuf::from(home).join("bin"));
-    }
-    dirs::home_dir().map(|home| home.join(".cargo").join("bin"))
-}
-
 fn sha256_file(path: &Path) -> Option<[u8; 32]> {
     let bytes = fs::read(path).ok()?;
     Some(Sha256::digest(&bytes).into())
@@ -35,12 +28,10 @@ fn sha256_file(path: &Path) -> Option<[u8; 32]> {
 /// installed at `$CARGO_HOME/bin/<bin>`. When either file is missing (fresh
 /// install, or the build didn't produce this binary) this returns `false`
 /// so the caller falls back to installing.
-pub fn is_up_to_date(target_dir: &Path, bin: &str) -> bool {
+pub fn is_up_to_date(target_dir: &Path, install_root: &Path, bin: &str) -> bool {
     let suffix = std::env::consts::EXE_SUFFIX;
     let built = target_dir.join("release").join(format!("{bin}{suffix}"));
-    let Some(installed) = cargo_bin_dir().map(|dir| dir.join(format!("{bin}{suffix}"))) else {
-        return false;
-    };
+    let installed = install_root.join("bin").join(format!("{bin}{suffix}"));
     match (sha256_file(&built), sha256_file(&installed)) {
         (Some(a), Some(b)) => a == b,
         _ => false,

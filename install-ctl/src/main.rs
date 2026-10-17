@@ -1,3 +1,4 @@
+mod apply_report;
 mod cli;
 mod commands;
 mod config;
@@ -6,18 +7,23 @@ mod guidance;
 pub mod installable;
 mod logging;
 mod paths;
+mod plan;
 mod process;
 mod registry;
+mod review_plan;
 mod selection;
 mod shell;
+mod tui;
 mod update;
 
 use std::{path::Path, time::Duration};
 
+use apply_report::{ActionStatus, ApplyAction, ApplyReport};
 use clap::{Parser, Subcommand};
 use cli::{ViewerCmd, WorkspaceCmd};
 use config::Config;
-use registry::{Artifact, ArtifactKind, load_registry, sync_catalog};
+use plan::{InstallOptions, InstallPlan};
+use registry::{Artifact, ArtifactKind, load_registry, load_registry_v2, sync_catalog};
 use selection::resolve_selection;
 
 #[derive(Parser)]
@@ -38,6 +44,7 @@ struct Cli {
     command: Option<Command>,
 }
 
+
 #[derive(Subcommand)]
 enum Command {
     /// Install one or more artifacts by id, category, or "all".
@@ -53,6 +60,9 @@ enum Command {
         /// Pass --locked to `cargo install` and require its lockfile to remain unchanged.
         #[arg(long)]
         locked: bool,
+        /// Target installation root directory.
+        #[arg(long)]
+        root: Option<std::path::PathBuf>,
     },
     /// Uninstall one or more artifacts by id, category, or "all".
     Uninstall {
@@ -74,6 +84,30 @@ enum Command {
     Catalog {
         #[arg(long)]
         check: bool,
+    },
+    /// Select and confirm installable artifacts interactively.
+    Tui {
+        /// Run `cargo install` without network access; the warm-up build remains online.
+        #[arg(long)]
+        offline: bool,
+        /// Pass --locked to `cargo install`.
+        #[arg(long)]
+        locked: bool,
+        /// Target installation root directory.
+        #[arg(long)]
+        root: Option<std::path::PathBuf>,
+        /// Guidance source root; required when a guidance profile is supplied.
+        #[arg(long)]
+        guidance_source: Option<std::path::PathBuf>,
+        /// Optional TOML guidance profile path (repeatable).
+        #[arg(long = "guidance-profile")]
+        guidance_profiles: Vec<std::path::PathBuf>,
+        /// Guidance corpus id to include (repeatable; required with a profile).
+        #[arg(long = "guidance-select")]
+        guidance_select: Vec<String>,
+        /// Guidance target root (required with a profile).
+        #[arg(long)]
+        guidance_target: Option<std::path::PathBuf>,
     },
     /// Start a viewer server (alias for `viewer start`; kept top-level so
     /// existing `install-ctl start <viewer>` invocations, e.g. from
@@ -132,24 +166,33 @@ fn main() {
             no_force,
             offline,
             locked,
+            root,
         }) => {
-            let reg = match load_registry() {
+            let reg = match load_registry_v2() {
                 Ok(reg) => reg,
                 Err(e) => fail(&e),
             };
-            let selected = match resolve_selection(&reg.artifacts, &selection) {
-                Ok(s) => s,
-                Err(e) => fail(&e),
+            let plan = match InstallPlan::from_inventory(
+                &reg.entries,
+                &selection,
+                resolve_install_root(root),
+                InstallOptions {
+                    force: !no_force,
+                    offline,
+                    locked,
+                },
+            ) {
+                Ok(plan) => plan,
+                Err(error) => fail(&error),
             };
-            if selected.is_empty() {
-                fail("selection matched no artifacts");
-            }
-            let force = !no_force;
-            let cargo_options = CargoInstallOptions { offline, locked };
             if cli.dry_run {
-                print_plan(&selected, force, cargo_options);
+                print_plan(&plan);
             } else {
-                run_install(&selected, force, cargo_options);
+                let report = run_install(&plan);
+                print_apply_report(&report);
+                if report.has_failures() {
+                    std::process::exit(1);
+                }
             }
         }
         Some(Command::Uninstall { selection, root }) => {
@@ -200,6 +243,83 @@ fn main() {
         Some(Command::Catalog { check }) => {
             if let Err(error) = sync_catalog(check) {
                 fail(&error);
+            }
+        }
+        Some(Command::Tui {
+            offline,
+            locked,
+            root,
+            guidance_source,
+            guidance_profiles,
+            guidance_select,
+            guidance_target,
+        }) => {
+            // A confirmed TUI selection cannot be replayed after this point.
+            // Shadow before rendering regardless of the initial root: review
+            // can edit that root to the running executable's destination.
+            let target_root = resolve_install_root(root);
+            relaunch_from_shadow_copy_if_replacing_self(true);
+            let reg = match load_registry_v2() {
+                Ok(reg) => reg,
+                Err(e) => fail(&e),
+            };
+            let guidance_inputs = if guidance_profiles.is_empty() {
+                if guidance_source.is_some()
+                    || guidance_target.is_some()
+                    || !guidance_select.is_empty()
+                {
+                    fail(
+                        "guidance source, target, and select require at least one --guidance-profile",
+                    );
+                }
+                vec![]
+            } else {
+                let source_root = guidance_source.unwrap_or_else(|| {
+                    fail("--guidance-source is required with --guidance-profile")
+                });
+                let target_root = guidance_target.unwrap_or_else(|| {
+                    fail("--guidance-target is required with --guidance-profile")
+                });
+                if guidance_select.is_empty() {
+                    fail("--guidance-select is required with --guidance-profile");
+                }
+                guidance_profiles
+                    .into_iter()
+                    .map(|profile_path| review_plan::GuidanceInput {
+                        source_root: source_root.clone(),
+                        profile_path,
+                        select: guidance_select.clone(),
+                        target_root: target_root.clone(),
+                        scope_override: None,
+                        explicit_override: None,
+                    })
+                    .collect()
+            };
+            let destination_paths = guidance::destination::DestinationPaths::platform_default();
+            match tui::run(
+                &reg.entries,
+                &guidance_inputs,
+                &destination_paths,
+                target_root,
+                InstallOptions {
+                    force: true,
+                    offline,
+                    locked,
+                },
+            ) {
+                Ok(Some(review)) => {
+                    // TUI self-replacement was handled before interaction.
+                    // Do not replay its argv after confirmation: the root may
+                    // have been edited since the pre-interaction check.
+                    let report =
+                        review_plan::apply_review_plan(&review, run_install_after_tui_review);
+                    print_apply_report(&report);
+                    if report.has_failures() {
+                        std::process::exit(1);
+                    }
+                }
+                Ok(None) => println!("cancelled; no writes performed"),
+                Err(error) => fail(&error),
             }
         }
         Some(Command::Start {
@@ -352,7 +472,11 @@ fn run_self_uninstall(target_root: &Path) {
     }
 }
 
-fn print_plan(selected: &[Artifact], force: bool, cargo_options: CargoInstallOptions) {
+fn print_plan(plan: &InstallPlan) {
+    let selected = &plan.selected;
+    let force = plan.options.force;
+    let cargo_options = plan.options;
+    let install_root = &plan.root;
     let repo_root = match registry::resolve_repo_root() {
         Ok(root) => root,
         Err(e) => fail(&e),
@@ -381,6 +505,7 @@ fn print_plan(selected: &[Artifact], force: bool, cargo_options: CargoInstallOpt
                     &features,
                     force,
                     cargo_options,
+                    install_root,
                 )
             );
         }
@@ -427,12 +552,6 @@ struct RustBuildPlan {
     packages: Vec<String>,
     bins: Vec<String>,
     feature_flags: Vec<String>,
-}
-
-#[derive(Clone, Copy, Default)]
-struct CargoInstallOptions {
-    offline: bool,
-    locked: bool,
 }
 
 impl RustBuildPlan {
@@ -564,6 +683,13 @@ fn group_summary<'a>(
     (ids, path, bins, features)
 }
 
+#[cfg(test)]
+struct CargoInstallOptions {
+    offline: bool,
+    locked: bool,
+}
+
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn install_args(
     repo_root: &Path,
@@ -574,6 +700,28 @@ fn install_args(
     force: bool,
     cargo_options: CargoInstallOptions,
 ) -> Vec<String> {
+    let root = resolve_install_root(None);
+    let options = InstallOptions {
+        force,
+        offline: cargo_options.offline,
+        locked: cargo_options.locked,
+    };
+    install_args_with_root(
+        repo_root, target_dir, path, bins, features, force, options, &root,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_args_with_root(
+    repo_root: &Path,
+    target_dir: &Path,
+    path: &str,
+    bins: &[&str],
+    features: &[&str],
+    force: bool,
+    cargo_options: InstallOptions,
+    install_root: &Path,
+) -> Vec<String> {
     let full_path = repo_root.join(path).to_string_lossy().to_string();
     let target_dir_str = target_dir.to_string_lossy().to_string();
     let mut args = vec![
@@ -582,6 +730,8 @@ fn install_args(
         full_path,
         "--target-dir".to_string(),
         target_dir_str,
+        "--root".to_string(),
+        install_root.to_string_lossy().to_string(),
     ];
     if cargo_options.offline {
         args.push("--offline".to_string());
@@ -610,10 +760,11 @@ fn install_command_string(
     bins: &[&str],
     features: &[&str],
     force: bool,
-    cargo_options: CargoInstallOptions,
+    cargo_options: InstallOptions,
+    install_root: &Path,
 ) -> String {
     std::iter::once("cargo".to_string())
-        .chain(install_args(
+        .chain(install_args_with_root(
             repo_root,
             target_dir,
             path,
@@ -621,6 +772,7 @@ fn install_command_string(
             features,
             force,
             cargo_options,
+            install_root,
         ))
         .collect::<Vec<_>>()
         .join(" ")
@@ -733,7 +885,26 @@ fn windows_display_path(path: std::path::PathBuf) -> String {
     path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
 }
 
-fn run_install(selected: &[Artifact], force: bool, cargo_options: CargoInstallOptions) {
+fn resolve_install_root(root: Option<std::path::PathBuf>) -> std::path::PathBuf {
+    root.or_else(|| std::env::var_os("CARGO_HOME").map(std::path::PathBuf::from))
+        .or_else(|| dirs::home_dir().map(|home| home.join(".cargo")))
+        .unwrap_or_else(|| fail("cannot locate target root directory"))
+}
+
+fn run_install(plan: &InstallPlan) -> ApplyReport {
+    run_install_with_shadow(plan, true)
+}
+
+fn run_install_after_tui_review(plan: &InstallPlan) -> ApplyReport {
+    run_install_with_shadow(plan, false)
+}
+
+fn run_install_with_shadow(plan: &InstallPlan, may_relaunch: bool) -> ApplyReport {
+    let mut report = ApplyReport::default();
+    let selected = &plan.selected;
+    let force = plan.options.force;
+    let cargo_options = plan.options;
+    let target_root = &plan.root;
     let replacing_self = selected.iter().any(|artifact| {
         artifact.kind == ArtifactKind::RustBinary
             && artifact
@@ -742,11 +913,21 @@ fn run_install(selected: &[Artifact], force: bool, cargo_options: CargoInstallOp
                 .unwrap_or(artifact.id.as_str())
                 .eq_ignore_ascii_case("install-ctl")
     });
-    relaunch_from_shadow_copy_if_replacing_self(replacing_self);
+    relaunch_from_shadow_copy_if_replacing_self(may_relaunch && replacing_self);
 
     let repo_root = match registry::resolve_repo_root() {
         Ok(root) => root,
-        Err(e) => fail(&e),
+        Err(error) => {
+            for artifact in selected {
+                report.push(binary_action(
+                    artifact,
+                    target_root,
+                    ActionStatus::Failed,
+                    &error,
+                ));
+            }
+            return report;
+        }
     };
 
     // Isolate build artifacts from the dev target dir so a running debug
@@ -756,21 +937,74 @@ fn run_install(selected: &[Artifact], force: bool, cargo_options: CargoInstallOp
         std::env::set_var("CARGO_TARGET_DIR", &target_dir);
     }
 
+    for exclusion in &plan.excluded {
+        report.push(ApplyAction {
+            id: exclusion.id.clone(),
+            target: std::path::PathBuf::new(),
+            status: ActionStatus::Skipped,
+            detail: exclusion.reason.clone(),
+        });
+    }
     let (rust_artifacts, ext_artifacts) = split_by_kind(selected);
 
     if !rust_artifacts.is_empty() {
-        install_rust_binaries(
-            &rust_artifacts,
-            &repo_root,
-            &target_dir,
-            force,
-            cargo_options,
+        report.actions.extend(
+            install_rust_binaries(
+                &rust_artifacts,
+                &repo_root,
+                &target_dir,
+                force,
+                cargo_options,
+                target_root,
+            )
+            .actions,
         );
     }
 
     for artifact in ext_artifacts {
-        install_vscode_extension(artifact, &repo_root);
+        let (status, detail) = if report.has_failures() {
+            (
+                ActionStatus::Skipped,
+                "not executed after an earlier failure".to_string(),
+            )
+        } else {
+            match install_vscode_extension(artifact, &repo_root) {
+                Ok(()) => (
+                    ActionStatus::Written,
+                    "extension install command completed".to_string(),
+                ),
+                Err(error) => (ActionStatus::Failed, error),
+            }
+        };
+        report.push(ApplyAction {
+            id: artifact.id.clone(),
+            target: repo_root.join(&artifact.path),
+            status,
+            detail,
+        });
     }
+    report
+}
+
+fn binary_action(
+    artifact: &Artifact,
+    root: &Path,
+    status: ActionStatus,
+    detail: &str,
+) -> ApplyAction {
+    let bin = artifact.bin.as_deref().unwrap_or(&artifact.id);
+    ApplyAction {
+        id: artifact.id.clone(),
+        target: root
+            .join("bin")
+            .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX)),
+        status,
+        detail: detail.to_string(),
+    }
+}
+
+fn print_apply_report(report: &ApplyReport) {
+    report.render();
 }
 
 fn install_rust_binaries(
@@ -778,11 +1012,23 @@ fn install_rust_binaries(
     repo_root: &Path,
     target_dir: &Path,
     force: bool,
-    cargo_options: CargoInstallOptions,
-) {
+    cargo_options: InstallOptions,
+    target_root: &Path,
+) -> ApplyReport {
+    let mut report = ApplyReport::default();
     let plan = match RustBuildPlan::new(artifacts, repo_root) {
         Ok(p) => p,
-        Err(e) => fail(&e),
+        Err(error) => {
+            for artifact in artifacts {
+                report.push(binary_action(
+                    artifact,
+                    target_root,
+                    ActionStatus::Failed,
+                    &error,
+                ));
+            }
+            return report;
+        }
     };
 
     println!("==> {}", plan.bins.join(", "));
@@ -795,14 +1041,33 @@ fn install_rust_binaries(
     let build_args = plan.build_args();
     let arg_refs: Vec<&str> = build_args.iter().map(String::as_str).collect();
     let label = plan.bins.join(", ");
-    if let Err(e) = shell::run_cmd_args("cargo", &arg_refs, repo_root, &label) {
-        fail(&e);
+    if let Err(error) = shell::run_cmd_args("cargo", &arg_refs, repo_root, &label) {
+        for artifact in artifacts {
+            report.push(binary_action(
+                artifact,
+                target_root,
+                ActionStatus::Failed,
+                &error,
+            ));
+        }
+        return report;
     }
 
     // cargo install only accepts one --path per call, so distinct crates
     // still need one call each; siblings sharing a crate (ticket +
     // ticket-mcp) are grouped into a single call via --bin/--features union.
     for group in group_by_path(artifacts) {
+        if report.has_failures() {
+            for artifact in group {
+                report.push(binary_action(
+                    artifact,
+                    target_root,
+                    ActionStatus::Skipped,
+                    "not executed after an earlier failure",
+                ));
+            }
+            continue;
+        }
         let (ids, path, bins, features) = group_summary(&group);
 
         // Skip bins whose freshly built output is byte-identical to what's
@@ -811,8 +1076,19 @@ fn install_rust_binaries(
         let stale_bins: Vec<&str> = bins
             .iter()
             .copied()
-            .filter(|bin| !freshness::is_up_to_date(target_dir, bin))
+            .filter(|bin| !freshness::is_up_to_date(target_dir, target_root, bin))
             .collect();
+        for artifact in &group {
+            let bin = artifact.bin.as_deref().unwrap_or(&artifact.id);
+            if !stale_bins.contains(&bin) {
+                report.push(binary_action(
+                    artifact,
+                    target_root,
+                    ActionStatus::Unchanged,
+                    "byte-identical to the freshly built binary",
+                ));
+            }
+        }
         if stale_bins.is_empty() {
             println!("==> {} (up to date, skipping)", ids.join(", "));
             continue;
@@ -833,7 +1109,7 @@ fn install_rust_binaries(
             }
         }
 
-        let args = install_args(
+        let args = install_args_with_root(
             repo_root,
             target_dir,
             path,
@@ -841,17 +1117,39 @@ fn install_rust_binaries(
             &features,
             force,
             cargo_options,
+            target_root,
         );
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let label = ids.join(", ");
         println!("==> {label}");
-        if let Err(e) = shell::run_cmd_args("cargo", &arg_refs, repo_root, &label) {
-            fail(&e);
+        let result = shell::run_cmd_args("cargo", &arg_refs, repo_root, &label);
+        for artifact in &group {
+            let bin = artifact.bin.as_deref().unwrap_or(&artifact.id);
+            if !stale_bins.contains(&bin) {
+                continue;
+            }
+            let action = match &result {
+                Err(error) => binary_action(artifact, target_root, ActionStatus::Failed, error),
+                Ok(()) if freshness::is_up_to_date(target_dir, target_root, bin) => binary_action(
+                    artifact,
+                    target_root,
+                    ActionStatus::Written,
+                    "installed binary matches the freshly built binary",
+                ),
+                Ok(()) => binary_action(
+                    artifact,
+                    target_root,
+                    ActionStatus::Failed,
+                    "installed binary is missing or differs from the freshly built binary",
+                ),
+            };
+            report.push(action);
         }
     }
+    report
 }
 
-fn install_vscode_extension(artifact: &Artifact, repo_root: &Path) {
+fn install_vscode_extension(artifact: &Artifact, repo_root: &Path) -> Result<(), String> {
     println!("==> {}", artifact.id);
     let script = artifact.npm_script.as_deref().unwrap_or("install:vsix");
     let ext_dir = repo_root.join(&artifact.path);
@@ -859,12 +1157,10 @@ fn install_vscode_extension(artifact: &Artifact, repo_root: &Path) {
     if !ext_dir.join("node_modules").is_dir()
         && let Err(e) = shell::run_cmd_args("npm", &["ci"], &ext_dir, &artifact.id)
     {
-        fail(&e);
+        return Err(e);
     }
 
-    if let Err(e) = shell::run_cmd_args("npm", &["run", script], &ext_dir, &artifact.id) {
-        fail(&e);
-    }
+    shell::run_cmd_args("npm", &["run", script], &ext_dir, &artifact.id)
 }
 
 fn fail(message: &str) -> ! {

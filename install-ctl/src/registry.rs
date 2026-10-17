@@ -265,6 +265,10 @@ pub fn resolve_repo_root() -> Result<PathBuf, String> {
 // ===========================================================================
 
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
+pub const INSTALL_CATEGORIES: &[EntryCategory; 6] = &[
+    EntryCategory::Cli, EntryCategory::Mcp, EntryCategory::Service,
+    EntryCategory::VscodeExtension, EntryCategory::Hook, EntryCategory::Misc,
+];
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -329,6 +333,13 @@ pub struct RegistryV2 {
     pub version: u32,
     #[serde(rename = "artifact", default)]
     pub entries: Vec<RegistryEntryV2>,
+}
+
+pub fn load_registry_v2() -> Result<RegistryV2, String> {
+    let path = resolve_registry_path()?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    parse_registry_v2(&text).map_err(|errors| format!("failed to parse {}: {errors:?}", path.display()))
 }
 
 /// Every way `parse_registry_v2` can reject a registry document (AC1, AC4, AC5).

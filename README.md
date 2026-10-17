@@ -20,6 +20,23 @@ install-ctl install install-ctl --locked
 install-ctl install install-ctl --offline --locked
 ```
 
+`install-ctl tui` accepts optional file-based guidance inputs without
+inventing a profile database: provide `--guidance-source`, one or more
+`--guidance-profile <profile.toml>`, `--guidance-select <id>`, and
+`--guidance-target <path>`. All four inputs are required when any profile is
+provided; destination scope remains the TOML profile policy.
+
+Scripted installation and confirmed TUI installation print a `result:` report
+after applying the reviewed selection. Each action includes its identifier,
+target, detail, and one of `written`, `unchanged`, `skipped`, or `failed`.
+Binary freshness is determined by comparing installed bytes with the fresh
+release build, not by checking whether the target already exists: replacing a
+different binary reports `written`. Build or install failures are reported
+before exiting nonzero; later installation groups are skipped after a failure.
+Guidance-only installation does not invoke a binary build. Guidance outcomes
+include completed file writes even when a later file or profile fails; writes
+are atomic per file, not transactional across the selection.
+
 `artifacts.toml` is the runtime-read registry of installable binaries and
 hooks. `COMMANDS.md` at the repository root is its generated projection:
 

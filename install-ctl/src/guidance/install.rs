@@ -6,6 +6,7 @@ use std::{fs, path::PathBuf};
 
 use crate::guidance::plan::GuidancePlan;
 
+#[derive(Default)]
 pub struct InstallReport {
     pub written: Vec<String>,
     pub unchanged: Vec<String>,
@@ -19,6 +20,17 @@ pub fn install_plan(
     plan: &GuidancePlan,
     source_root: &std::path::Path,
 ) -> Result<InstallReport, String> {
+    let mut report = InstallReport::default();
+    install_plan_with_report(plan, source_root, &mut report)?;
+    Ok(report)
+}
+
+/// Retain completed file outcomes in `report`, including when a later write fails.
+pub fn install_plan_with_report(
+    plan: &GuidancePlan,
+    source_root: &std::path::Path,
+    report: &mut InstallReport,
+) -> Result<(), String> {
     if plan.is_blocking() {
         return Err(format!(
             "refusing to install: plan has {} blocking diagnostic(s)",
@@ -54,8 +66,6 @@ pub fn install_plan(
         staged.push((final_path, bytes));
     }
 
-    let mut written = Vec::new();
-    let mut unchanged = Vec::new();
     for (final_path, bytes) in staged {
         if let Some(parent) = final_path.parent() {
             fs::create_dir_all(parent)
@@ -65,7 +75,7 @@ pub fn install_plan(
             .map(|existing| existing == bytes)
             .unwrap_or(false)
         {
-            unchanged.push(crate::paths::disp(&final_path));
+            report.unchanged.push(crate::paths::disp(&final_path));
             continue;
         }
         let tmp_name = format!(
@@ -80,8 +90,64 @@ pub fn install_plan(
             .map_err(|e| format!("failed to stage '{}': {e}", tmp_path.display()))?;
         fs::rename(&tmp_path, &final_path)
             .map_err(|e| format!("failed to install '{}': {e}", final_path.display()))?;
-        written.push(crate::paths::disp(&final_path));
+        report.written.push(crate::paths::disp(&final_path));
     }
 
-    Ok(InstallReport { written, unchanged })
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::guidance::plan::{ArtifactOrigin, PlannedArtifact};
+
+    #[test]
+    fn reporting_retains_written_file_when_a_later_destination_is_blocked() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source.join("first.md"), "first contents").unwrap();
+        fs::write(source.join("second.md"), "second contents").unwrap();
+        fs::write(target.join("blocked"), "not a directory").unwrap();
+        let plan = GuidancePlan {
+            profile_id: "partial-report".into(),
+            selected_roots: vec!["first.md".into(), "second.md".into()],
+            destination_scope: "repo".into(),
+            destination_root: target.display().to_string(),
+            artifacts: vec![
+                PlannedArtifact {
+                    id: "first.md".into(),
+                    origin: ArtifactOrigin::Direct,
+                    final_path: "first.md".into(),
+                    rewrites: vec![],
+                },
+                PlannedArtifact {
+                    id: "second.md".into(),
+                    origin: ArtifactOrigin::Direct,
+                    final_path: "blocked/second.md".into(),
+                    rewrites: vec![],
+                },
+            ],
+            edges: vec![],
+            skipped_external: vec![],
+            diagnostics: vec![],
+        };
+        let mut report = InstallReport::default();
+
+        let error = install_plan_with_report(&plan, &source, &mut report).unwrap_err();
+
+        assert!(error.contains("failed to create"), "{error}");
+        assert_eq!(
+            report.written,
+            vec![crate::paths::disp(&target.join("first.md"))]
+        );
+        assert!(report.unchanged.is_empty());
+        assert_eq!(
+            fs::read_to_string(target.join("first.md")).unwrap(),
+            "first contents"
+        );
+        assert!(!target.join("blocked/second.md").exists());
+    }
 }
