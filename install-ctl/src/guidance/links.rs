@@ -6,10 +6,15 @@ use std::{
 use clap::ValueEnum;
 use serde::Serialize;
 
+pub mod settings;
+pub mod vscode;
+mod vscode_links;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Harness {
     CopilotCli,
+    Vscode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -75,6 +80,9 @@ pub fn build_link_plan(
     };
     let mappings = match harness {
         Harness::CopilotCli => COPILOT_MAPPINGS,
+        Harness::Vscode => {
+            return Err("use vscode::build_plan for the VS Code harness".to_owned());
+        }
     };
     for &(source, destination) in mappings {
         if operation == LinkOperation::Link {

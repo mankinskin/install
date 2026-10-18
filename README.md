@@ -115,6 +115,8 @@ install-ctl guidance autofix   --repo-root <repo> [--scope <path>] [--rewrite ol
 install-ctl guidance get       <repository-url> --select <id>... [--profile <repo-relative-path>] [--target <repo>] [--destination-scope ...] [--destination-path ...] [--keep-checkout] [--json]
 install-ctl guidance link      --repo <repo> --harness copilot-cli (--plan | --apply) [--json]
 install-ctl guidance unlink    --repo <repo> --harness copilot-cli (--plan | --apply) [--json]
+install-ctl guidance link      --repo <repo> --harness vscode --source NAME=PATH... [--migrate] (--plan | --apply) [--json]
+install-ctl guidance unlink    --repo <repo> --harness vscode --source NAME=PATH... (--plan | --apply) [--json]
 ```
 
 - `plan` computes a read-only installation plan: no writes, no recipe
@@ -166,7 +168,7 @@ install-ctl guidance link --repo . --harness copilot-cli --plan
 install-ctl guidance link --repo . --harness copilot-cli --apply
 ```
 
-Only `copilot-cli` is supported initially:
+The `copilot-cli` layout remains:
 
 | Harness Path | Canonical Source | Purpose |
 |---|---|---|
@@ -214,11 +216,111 @@ after successful application; any blocked or failed operation exits nonzero.
 
 Focused validation is `cargo test -p install-ctl guidance::links`; CLI parsing
 and read-only command tests run with `cargo test -p install-ctl guidance_link_cli`.
-Four real-symlink tests are explicitly ignored on Windows without a known
+Real-symlink tests are explicitly ignored on Windows without a known
 symlink-capable environment. With the prerequisite enabled, run them using
 `cargo test -p install-ctl guidance::links -- --ignored`. Unix runs the same
 real-symlink tests normally. Windows additionally tests actual junction
 rejection without requiring symbolic-link privileges.
+
+### VS Code: multiple named guidance sources
+
+Use the separate `vscode` harness when the root workspace must expose guidance
+from several repository-contained sources, including initialized submodules:
+
+```powershell
+install-ctl guidance link --repo . --harness vscode `
+  --source root=.agents `
+  --source workflow-tools=workflow-tools\.agents `
+  --source context-engine=context-engine\.agents --plan --json
+```
+
+Review the plan, then repeat the command with `--apply` instead of `--plan`.
+Running a command is an explicit activation of the selected repository;
+documentation examples do not authorize activation of another workspace.
+
+Each present kind becomes a named, relative directory symlink:
+
+| Kind | Named destination | Root source target |
+|---|---|---|
+| agents | `.github/agents/root` | `../../.agents/agents` |
+| instructions | `.github/instructions/root` | `../../.agents/instructions` |
+| prompts | `.github/prompts/root` | `../../.agents/prompts` |
+
+The kind containers are ordinary directories. Source names must begin with a
+lowercase ASCII letter or digit and contain only lowercase letters, digits,
+`-`, or `_`; Windows reserved device names are rejected. Sources are explicit
+repository-relative paths, not recursively discovered. Absolute paths,
+traversal, canonical escapes, and unavailable explicit sources block linking.
+Each source needs at least one supported kind; individual missing kinds are
+reported as skipped. The command never initializes or clones submodules.
+
+VS Code does not recursively discover agents and prompts in these containers.
+The transaction therefore adds forward-slash `true` entries to the workspace's
+`.vscode/settings.json` location objects:
+
+- `chat.agentFilesLocations`: `.github/agents/<name>`
+- `chat.instructionsFilesLocations`: `.github/instructions/<name>`
+- `chat.promptFilesLocations`: `.github/prompts/<name>`
+
+The JSONC editor preserves comments, trailing commas, indentation, newline
+style, and unrelated settings. Existing `true` entries are user-owned; false
+or nonboolean selected entries, duplicate relevant properties, invalid JSONC,
+and nonobject location settings block rather than being overwritten.
+Existing discovery settings are not disabled. Source contents, `applyTo`,
+frontmatter, agent names, and tool permissions remain unchanged. Named folders
+namespace paths, not duplicate user-facing frontmatter names or VS Code's
+consumer precedence rules. `.claude/commands` is not changed.
+
+If a kind container is already a legacy single-source alias, the default plan
+refuses conversion. Add `--migrate` only when the alias is a real, resolvable
+symlink to the corresponding kind of an explicitly selected source. Foreign
+aliases, broken legacy aliases, junctions, ordinary files, and indirect
+ancestors remain blockers. Migration is invalid on unlink and both new flags
+are invalid for `copilot-cli`.
+
+Version-1 ownership is stored in `.vscode/install-ctl-guidance-links.json`,
+including source mappings, destinations, raw relative targets, and which
+settings properties the tool inserted. Do not hand-edit the record. All link,
+settings, and ownership preconditions are checked before mutation. Apply
+rechecks staleness and rolls back failed operations, restoring configuration
+bytes and raw removed-link targets; rollback failures are reported explicitly.
+Windows requires Developer Mode or a user-chosen privileged terminal, with no
+automatic elevation or alternative link type.
+
+To remove only one managed source:
+
+```powershell
+install-ctl guidance unlink --repo . --harness vscode `
+  --source workflow-tools=workflow-tools\.agents --plan --json
+# After review, repeat with --apply instead of --plan.
+```
+
+Unselected sources and user-owned settings survive. Unlink removes only
+matching recorded links and still-`true` tool-inserted settings; source
+directories may already be missing. Modified ownership/settings or selected
+links without matching ownership block removal. No record and no selected
+links is a no-op. The last unlink removes the empty record and removes the
+settings file only if the tool originally created the file and no user
+content remains. Ordinary parent directories are retained.
+
+VS Code JSON reports contain `plan`, `applied`, and `error`; the plan includes
+link actions and `configuration_changes`, without dumping existing settings
+bytes. `applied` becomes true only after the complete transaction succeeds.
+Refresh VS Code discovery after link/unlink. Verify agents, prompt invocation
+in Local chat, and instruction attachment in a disposable workspace; generated
+files alone do not prove consumer discovery.
+
+Run from the parent `workflow-tools` Cargo workspace:
+
+```powershell
+cargo test -p install-ctl guidance::links::tests::vscode_integration -- --include-ignored
+cargo test -p install-ctl guidance::links -- --include-ignored
+cargo test -p install-ctl guidance_link_cli -- --include-ignored
+cargo test -p install-ctl
+```
+
+On Windows, `--include-ignored` actually exercises privilege-dependent cases;
+a skip or privilege failure is not passing symlink or VS Code consumer evidence.
 
 ## Artifact & Self Uninstallation
 

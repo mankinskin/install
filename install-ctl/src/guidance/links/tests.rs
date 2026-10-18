@@ -1,6 +1,18 @@
 use super::*;
 use tempfile::TempDir;
 
+#[path = "tests/vscode_plan.rs"]
+mod vscode_plan;
+
+#[path = "tests/vscode_links.rs"]
+mod vscode_links;
+
+#[path = "tests/vscode_settings.rs"]
+mod vscode_settings;
+
+#[path = "tests/vscode_integration.rs"]
+mod vscode_integration;
+
 fn fixture() -> TempDir {
     let repo = TempDir::new().unwrap();
     for directory in ["agents", "instructions", "prompts"] {

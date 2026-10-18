@@ -111,12 +111,80 @@ fn guidance_link_cli_plan_does_not_create_harness_paths() {
         plan: true,
         apply: false,
         json: true,
+        sources: vec![],
+        migrate: false,
     };
     super::run(super::GuidanceCmd::Link(args)).unwrap();
     assert!(!repo.path().join(".github").exists());
     assert_eq!(
         fs::read_to_string(repo.path().join(".agents/agents/example.agent.md")).unwrap(),
         "original"
+    );
+}
+
+#[test]
+fn guidance_link_cli_vscode_requires_explicit_sources_and_plans_without_writes() {
+    use clap::Parser;
+    let base = [
+        "install-ctl",
+        "guidance",
+        "link",
+        "--harness",
+        "vscode",
+        "--plan",
+    ];
+    assert!(crate::Cli::try_parse_from(base).is_err());
+    assert!(
+        crate::Cli::try_parse_from(base.into_iter().chain(["--source", "root=.agents"])).is_ok()
+    );
+
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), ".agents/agents/demo.agent.md", "original");
+    let args = super::GuidanceLinkArgs {
+        repo: repo.path().to_owned(),
+        harness: super::links::Harness::Vscode,
+        plan: true,
+        apply: false,
+        json: true,
+        sources: vec!["root=.agents".to_owned()],
+        migrate: false,
+    };
+    super::run(super::GuidanceCmd::Link(args)).unwrap();
+    assert!(!repo.path().join(".github").exists());
+    assert!(!repo.path().join(".vscode").exists());
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires real directory symlink privilege")]
+fn guidance_link_cli_vscode_apply_writes_complete_transaction() {
+    let repo = TempDir::new().unwrap();
+    write(repo.path(), ".agents/agents/demo.agent.md", "original");
+    let args = super::GuidanceLinkArgs {
+        repo: repo.path().to_owned(),
+        harness: super::links::Harness::Vscode,
+        plan: false,
+        apply: true,
+        json: true,
+        sources: vec!["root=.agents".to_owned()],
+        migrate: false,
+    };
+    super::run(super::GuidanceCmd::Link(args)).unwrap();
+    assert!(
+        repo.path()
+            .join(".github/agents/root/demo.agent.md")
+            .is_file()
+    );
+    let settings: serde_json::Value =
+        serde_json::from_slice(&fs::read(repo.path().join(".vscode/settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        settings["chat.agentFilesLocations"][".github/agents/root"],
+        true
+    );
+    assert!(
+        repo.path()
+            .join(".vscode/install-ctl-guidance-links.json")
+            .is_file()
     );
 }
 
