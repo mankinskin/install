@@ -6,12 +6,12 @@
 mod installable;
 #[path = "../src/paths.rs"]
 mod paths;
+#[path = "../src/plan.rs"]
+mod plan;
 #[path = "../src/registry.rs"]
 mod registry;
 #[path = "../src/selection.rs"]
 mod selection;
-#[path = "../src/plan.rs"]
-mod plan;
 
 use std::path::PathBuf;
 
@@ -41,7 +41,10 @@ fn artifact(id: &str, category: &str) -> Artifact {
 }
 
 fn ids(plan: &InstallPlan) -> Vec<&str> {
-    plan.selected.iter().map(|artifact| artifact.id.as_str()).collect()
+    plan.selected
+        .iter()
+        .map(|artifact| artifact.id.as_str())
+        .collect()
 }
 
 #[test]
@@ -56,13 +59,9 @@ fn plan_preserves_explicit_root_and_all_cargo_options_without_writing() {
         locked: true,
     };
 
-    let plan = InstallPlan::from_tokens(
-        &artifacts(),
-        &["doc-viewer".into()],
-        root.clone(),
-        options,
-    )
-    .unwrap();
+    let plan =
+        InstallPlan::from_tokens(&artifacts(), &["doc-viewer".into()], root.clone(), options)
+            .unwrap();
 
     assert_eq!(ids(&plan), ["doc-viewer"]);
     assert_eq!(plan.root, root);

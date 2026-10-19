@@ -1,7 +1,11 @@
 //! Real PTY coverage for the composed guidance review.  Pure state-model
 //! tests remain separate; this drives the compiled install-ctl binary.
 
-use std::{fs, path::{Path, PathBuf}, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 mod support;
 
@@ -30,7 +34,11 @@ fn fixture(scope: &str, count: usize) -> Fixture {
         fs::write(source_path, format!("fixture guidance {index}\n")).unwrap();
         paths.push(format!("\"{relative}\""));
     }
-    let explicit = if scope == "explicit" { "path = \"../escape\"\n" } else { "" };
+    let explicit = if scope == "explicit" {
+        "path = \"../escape\"\n"
+    } else {
+        ""
+    };
     fs::write(
         &profile,
         format!(
@@ -39,7 +47,13 @@ fn fixture(scope: &str, count: usize) -> Fixture {
         ),
     )
     .unwrap();
-    Fixture { _temp: temp, source, profile, guidance_target, binary_root }
+    Fixture {
+        _temp: temp,
+        source,
+        profile,
+        guidance_target,
+        binary_root,
+    }
 }
 
 fn spawn(fixture: &Fixture) -> BoundedPty {
@@ -112,7 +126,10 @@ fn guidance_review_shows_plan_before_confirm_and_root_edit_does_not_change_guida
     review_guidance_only(&mut harness);
 
     scroll_until(&mut harness, "pty-profile");
-    scroll_until(&mut harness, &rendered_guidance_destination(&fixture.guidance_target));
+    scroll_until(
+        &mut harness,
+        &rendered_guidance_destination(&fixture.guidance_target),
+    );
     scroll_until(&mut harness, ".agents/items/00.md");
 
     harness.send_key(KeyCode::Char('r')).unwrap();
@@ -123,11 +140,16 @@ fn guidance_review_shows_plan_before_confirm_and_root_edit_does_not_change_guida
         harness.send_key(KeyCode::Backspace).unwrap();
     }
     let edited_root = fixture._temp.path().join("edited-binary-root");
-    harness.send_keys(&edited_root.display().to_string()).unwrap();
+    harness
+        .send_keys(&edited_root.display().to_string())
+        .unwrap();
     harness.send_key(KeyCode::Enter).unwrap();
     harness.wait_for_text("Review — Enter/y install").unwrap();
     scroll_until(&mut harness, &edited_root.display().to_string());
-    scroll_until(&mut harness, &rendered_guidance_destination(&fixture.guidance_target));
+    scroll_until(
+        &mut harness,
+        &rendered_guidance_destination(&fixture.guidance_target),
+    );
 
     scroll_until(&mut harness, ".agents/items/15.md");
     cancel_and_wait(&mut harness);
@@ -141,14 +163,19 @@ fn guidance_only_confirm_writes_fixture_through_real_tui_without_binary_install(
     let mut harness = spawn(&fixture);
     review_guidance_only(&mut harness);
     harness.send_key(KeyCode::Char('y')).unwrap();
-    harness.wait_for_path(&fixture.guidance_target.join(".agents/items/00.md")).unwrap();
+    harness
+        .wait_for_path(&fixture.guidance_target.join(".agents/items/00.md"))
+        .unwrap();
     assert!(harness.wait_exit().unwrap().success());
 
     assert_eq!(
         fs::read_to_string(fixture.guidance_target.join(".agents/items/00.md")).unwrap(),
         "fixture guidance 0\n"
     );
-    assert!(!fixture.binary_root.exists(), "guidance-only confirmation must not install binaries");
+    assert!(
+        !fixture.binary_root.exists(),
+        "guidance-only confirmation must not install binaries"
+    );
 }
 
 #[test]
@@ -157,7 +184,9 @@ fn blocking_guidance_review_rejects_confirmation_then_cancels_without_writes() {
     let mut harness = spawn(&fixture);
     review_guidance_only(&mut harness);
     harness.send_key(KeyCode::Char('y')).unwrap();
-    harness.wait_for_text("review has blocking diagnostics").unwrap();
+    harness
+        .wait_for_text("review has blocking diagnostics")
+        .unwrap();
     cancel_and_wait(&mut harness);
     assert!(!fixture.guidance_target.exists());
     assert!(!fixture.binary_root.exists());

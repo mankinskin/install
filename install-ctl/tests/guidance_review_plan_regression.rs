@@ -1,31 +1,31 @@
 //! Contract for optional guidance composition in the installer review.
 //! This is deliberately a plan/apply gate, not terminal or PTY coverage.
 
+#[path = "../src/apply_report.rs"]
+mod apply_report;
 #[path = "../src/installable.rs"]
 mod installable;
 #[path = "../src/paths.rs"]
 mod paths;
+#[path = "../src/plan.rs"]
+mod plan;
 #[path = "../src/registry.rs"]
 mod registry;
 #[path = "../src/selection.rs"]
 mod selection;
-#[path = "../src/plan.rs"]
-mod plan;
-#[path = "../src/apply_report.rs"]
-mod apply_report;
 
 #[path = "../src/guidance/destination.rs"]
 pub mod guidance_destination;
 #[path = "../src/guidance/graph.rs"]
 pub mod guidance_graph;
+#[path = "../src/guidance/install.rs"]
+pub mod guidance_install;
+#[path = "../src/guidance/plan.rs"]
+pub mod guidance_plan;
 #[path = "../src/guidance/profile.rs"]
 pub mod guidance_profile;
 #[path = "../src/guidance/rewrite.rs"]
 pub mod guidance_rewrite;
-#[path = "../src/guidance/plan.rs"]
-pub mod guidance_plan;
-#[path = "../src/guidance/install.rs"]
-pub mod guidance_install;
 
 mod guidance {
     pub use crate::guidance_destination as destination;
@@ -38,7 +38,10 @@ mod guidance {
 #[path = "../src/review_plan.rs"]
 mod review_plan;
 
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use guidance::{
     destination::DestinationPaths,
@@ -119,22 +122,38 @@ fn composed_guidance_reuses_existing_builder_without_scope_mutation() {
     };
 
     let direct = build_plan(&PlanInputs {
-        source_root: &source, profile_path: &profile, select: &["root".into()],
-        target_root: &target, scope_override: None, explicit_override: None,
+        source_root: &source,
+        profile_path: &profile,
+        select: &["root".into()],
+        target_root: &target,
+        scope_override: None,
+        explicit_override: None,
         destination_paths: &paths,
-    }).unwrap();
+    })
+    .unwrap();
     let review = build_review_plan(
         artifact_plan(temp.path().join("binary-root")),
         &[input(&source, &profile, &target)],
         &paths,
-    ).unwrap();
+    )
+    .unwrap();
     let composed = &review.guidance[0].plan;
 
     assert_eq!(composed.profile_id, direct.profile_id);
     assert_eq!(composed.destination_scope, "user");
     assert_eq!(composed.destination_root, direct.destination_root);
-    assert_eq!(composed.artifacts.iter().map(|a| (&a.id, &a.final_path)).collect::<Vec<_>>(),
-        direct.artifacts.iter().map(|a| (&a.id, &a.final_path)).collect::<Vec<_>>());
+    assert_eq!(
+        composed
+            .artifacts
+            .iter()
+            .map(|a| (&a.id, &a.final_path))
+            .collect::<Vec<_>>(),
+        direct
+            .artifacts
+            .iter()
+            .map(|a| (&a.id, &a.final_path))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -188,15 +207,20 @@ fn blocking_guidance_prevents_both_apply_paths_and_cancellation_writes_nothing()
     fs::write(source.join(".agents/AGENTS.md"), "guidance").unwrap();
     write_profile(&profile, "explicit");
     let paths = DestinationPaths {
-        user_root: temp.path().join("user"), system_root: temp.path().join("system"),
+        user_root: temp.path().join("user"),
+        system_root: temp.path().join("system"),
     };
     let review = build_review_plan(
         artifact_plan(temp.path().join("binary-root")),
         &[input(&source, &profile, &target)],
         &paths,
-    ).unwrap();
+    )
+    .unwrap();
     assert!(review.is_blocking());
-    assert!(!target.exists(), "planning/review cancellation must not write");
+    assert!(
+        !target.exists(),
+        "planning/review cancellation must not write"
+    );
 
     let mut artifact_apply_called = false;
     let report = apply_review_plan(&review, |_| {
@@ -204,8 +228,14 @@ fn blocking_guidance_prevents_both_apply_paths_and_cancellation_writes_nothing()
         apply_report::ApplyReport::default()
     });
     assert!(report.has_failures());
-    assert!(!artifact_apply_called, "blocking guidance must gate binary apply");
-    assert!(!target.exists(), "blocking guidance must gate guidance apply");
+    assert!(
+        !artifact_apply_called,
+        "blocking guidance must gate binary apply"
+    );
+    assert!(
+        !target.exists(),
+        "blocking guidance must gate guidance apply"
+    );
 }
 
 #[test]
@@ -226,13 +256,21 @@ fn cross_profile_destination_collision_blocks_all_apply_paths() {
     };
     let review = build_review_plan(
         artifact_plan(temp.path().join("binary-root")),
-        &[input(&first_source, &profile, &target), input(&second_source, &profile, &target)],
+        &[
+            input(&first_source, &profile, &target),
+            input(&second_source, &profile, &target),
+        ],
         &paths,
     )
     .unwrap();
 
     assert!(review.is_blocking());
-    assert!(review.guidance.iter().all(|planned| planned.plan.is_blocking()));
+    assert!(
+        review
+            .guidance
+            .iter()
+            .all(|planned| planned.plan.is_blocking())
+    );
     let mut binary_apply_called = false;
     let report = apply_review_plan(&review, |_| {
         binary_apply_called = true;
@@ -240,5 +278,8 @@ fn cross_profile_destination_collision_blocks_all_apply_paths() {
     });
     assert!(report.has_failures());
     assert!(!binary_apply_called);
-    assert!(!paths.user_root.exists(), "collision gate must run before writes");
+    assert!(
+        !paths.user_root.exists(),
+        "collision gate must run before writes"
+    );
 }

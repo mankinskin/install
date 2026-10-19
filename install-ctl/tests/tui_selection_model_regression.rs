@@ -1,31 +1,31 @@
 //! Pure selection-state contract for the terminal TUI. This is intentionally
 //! not a substitute for the later ratatui-testlib/PTY acceptance coverage.
 
+#[path = "../src/apply_report.rs"]
+mod apply_report;
 #[path = "../src/installable.rs"]
 mod installable;
 #[path = "../src/paths.rs"]
 mod paths;
+#[path = "../src/plan.rs"]
+mod plan;
 #[path = "../src/registry.rs"]
 mod registry;
 #[path = "../src/selection.rs"]
 mod selection;
-#[path = "../src/plan.rs"]
-mod plan;
-#[path = "../src/apply_report.rs"]
-mod apply_report;
 
 #[path = "../src/guidance/destination.rs"]
 pub mod guidance_destination;
 #[path = "../src/guidance/graph.rs"]
 pub mod guidance_graph;
+#[path = "../src/guidance/install.rs"]
+pub mod guidance_install;
+#[path = "../src/guidance/plan.rs"]
+pub mod guidance_plan;
 #[path = "../src/guidance/profile.rs"]
 pub mod guidance_profile;
 #[path = "../src/guidance/rewrite.rs"]
 pub mod guidance_rewrite;
-#[path = "../src/guidance/plan.rs"]
-pub mod guidance_plan;
-#[path = "../src/guidance/install.rs"]
-pub mod guidance_install;
 
 mod guidance {
     pub use crate::guidance_destination as destination;
@@ -128,7 +128,11 @@ fn all_reaches_review_with_installable_selection_and_exclusion_diagnostics() {
     let review = state.prepare_review().unwrap();
 
     assert_eq!(
-        review.selected.iter().map(|artifact| artifact.id.as_str()).collect::<Vec<_>>(),
+        review
+            .selected
+            .iter()
+            .map(|artifact| artifact.id.as_str())
+            .collect::<Vec<_>>(),
         ["doc-viewer"]
     );
     assert_eq!(review.root, root);
@@ -174,10 +178,17 @@ fn filtered_cursor_toggles_the_visible_inventory_entry_not_a_hidden_row() {
     state.toggle_visible(0).unwrap();
     let review = state.prepare_review().unwrap();
     assert_eq!(
-        review.selected.iter().map(|artifact| artifact.id.as_str()).collect::<Vec<_>>(),
+        review
+            .selected
+            .iter()
+            .map(|artifact| artifact.id.as_str())
+            .collect::<Vec<_>>(),
         ["doc-viewer"]
     );
-    assert!(review.excluded.is_empty(), "hidden hook must remain unselected");
+    assert!(
+        review.excluded.is_empty(),
+        "hidden hook must remain unselected"
+    );
 }
 
 #[test]
@@ -211,7 +222,10 @@ fn cancellation_discards_selection_and_never_reuses_a_prepared_plan_or_writes() 
     assert!(state.prepare_review().is_ok());
 
     state.cancel();
-    assert!(!root.exists(), "selection/review/cancellation must not write");
+    assert!(
+        !root.exists(),
+        "selection/review/cancellation must not write"
+    );
     assert_eq!(
         state.prepare_review().unwrap_err(),
         "selection matched no artifacts",
@@ -227,7 +241,10 @@ fn composed_review_preserves_explicit_unsupported_artifact_error_with_guidance()
     state.enter_artifacts();
 
     assert_eq!(
-        state.prepare_composed_review(&[input], &paths).err().unwrap(),
+        state
+            .prepare_composed_review(&[input], &paths)
+            .err()
+            .unwrap(),
         "cannot install 'hook-capture': hook entries are inspect-only",
         "guidance composition must not replace an explicit artifact diagnostic"
     );
@@ -257,10 +274,18 @@ fn all_with_exclusions_and_valid_guidance_is_a_nonblocking_composed_review() {
 
     let review = state.prepare_composed_review(&[input], &paths).unwrap();
     assert_eq!(
-        review.install.selected.iter().map(|artifact| artifact.id.as_str()).collect::<Vec<_>>(),
+        review
+            .install
+            .selected
+            .iter()
+            .map(|artifact| artifact.id.as_str())
+            .collect::<Vec<_>>(),
         ["doc-viewer"]
     );
     assert_eq!(review.install.excluded.len(), 2);
     assert_eq!(review.guidance.len(), 1);
-    assert!(!review.is_blocking(), "all exclusions are informational, not guidance diagnostics");
+    assert!(
+        !review.is_blocking(),
+        "all exclusions are informational, not guidance diagnostics"
+    );
 }

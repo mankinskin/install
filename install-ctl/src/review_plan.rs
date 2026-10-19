@@ -5,7 +5,7 @@ use crate::{
     guidance::{
         destination::DestinationPaths,
         install::install_plan_with_report,
-        plan::{build_plan, GuidancePlan, PlanInputs},
+        plan::{GuidancePlan, PlanInputs, build_plan},
         profile::DestinationScopeKind,
     },
     plan::InstallPlan,
@@ -20,15 +20,40 @@ pub struct GuidanceInput {
     pub scope_override: Option<DestinationScopeKind>,
     pub explicit_override: Option<PathBuf>,
 }
-pub struct PlannedGuidance { pub source_root: PathBuf, pub plan: GuidancePlan }
-pub struct ReviewPlan { pub install: InstallPlan, pub guidance: Vec<PlannedGuidance> }
-impl ReviewPlan { pub fn is_blocking(&self) -> bool { self.guidance.iter().any(|g| g.plan.is_blocking()) } }
+pub struct PlannedGuidance {
+    pub source_root: PathBuf,
+    pub plan: GuidancePlan,
+}
+pub struct ReviewPlan {
+    pub install: InstallPlan,
+    pub guidance: Vec<PlannedGuidance>,
+}
+impl ReviewPlan {
+    pub fn is_blocking(&self) -> bool {
+        self.guidance.iter().any(|g| g.plan.is_blocking())
+    }
+}
 
-pub fn build_review_plan(install: InstallPlan, inputs: &[GuidanceInput], paths: &DestinationPaths) -> Result<ReviewPlan, String> {
+pub fn build_review_plan(
+    install: InstallPlan,
+    inputs: &[GuidanceInput],
+    paths: &DestinationPaths,
+) -> Result<ReviewPlan, String> {
     let mut guidance = Vec::new();
     for input in inputs {
-        let plan = build_plan(&PlanInputs { source_root: &input.source_root, profile_path: &input.profile_path, select: &input.select, target_root: &input.target_root, scope_override: input.scope_override, explicit_override: input.explicit_override.as_deref(), destination_paths: paths })?;
-        guidance.push(PlannedGuidance { source_root: input.source_root.clone(), plan });
+        let plan = build_plan(&PlanInputs {
+            source_root: &input.source_root,
+            profile_path: &input.profile_path,
+            select: &input.select,
+            target_root: &input.target_root,
+            scope_override: input.scope_override,
+            explicit_override: input.explicit_override.as_deref(),
+            destination_paths: paths,
+        })?;
+        guidance.push(PlannedGuidance {
+            source_root: input.source_root.clone(),
+            plan,
+        });
     }
     let mut destinations: BTreeMap<PathBuf, Vec<(usize, String)>> = BTreeMap::new();
     for (plan_index, planned) in guidance.iter().enumerate() {
@@ -48,11 +73,16 @@ pub fn build_review_plan(install: InstallPlan, inputs: &[GuidanceInput], paths: 
                 .collect::<Vec<_>>()
                 .join(", ");
             for (plan_index, _) in artifacts {
-                guidance[plan_index].plan.diagnostics.push(crate::guidance::graph::Diagnostic {
-                    code: crate::guidance::graph::DiagnosticCode::DuplicateDestination,
-                    subject: crate::paths::disp(&destination),
-                    message: format!("guidance profiles map {description} to the same destination"),
-                });
+                guidance[plan_index]
+                    .plan
+                    .diagnostics
+                    .push(crate::guidance::graph::Diagnostic {
+                        code: crate::guidance::graph::DiagnosticCode::DuplicateDestination,
+                        subject: crate::paths::disp(&destination),
+                        message: format!(
+                            "guidance profiles map {description} to the same destination"
+                        ),
+                    });
             }
         }
     }
@@ -92,7 +122,11 @@ where
                 report.push(ApplyAction {
                     id: format!("{}:{path}", planned.plan.profile_id),
                     target: path.into(),
-                    status: if written { ActionStatus::Written } else { ActionStatus::Unchanged },
+                    status: if written {
+                        ActionStatus::Written
+                    } else {
+                        ActionStatus::Unchanged
+                    },
                     detail: "guidance file apply completed".into(),
                 });
             }
@@ -102,7 +136,9 @@ where
                 id: planned.plan.profile_id.clone(),
                 target: planned.plan.destination_root.clone().into(),
                 status: ActionStatus::Failed,
-                detail: format!("{error}; completed files are reported above; remaining files were not applied"),
+                detail: format!(
+                    "{error}; completed files are reported above; remaining files were not applied"
+                ),
             });
         }
     }

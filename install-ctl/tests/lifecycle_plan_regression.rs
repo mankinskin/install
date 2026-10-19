@@ -6,18 +6,18 @@
 mod installable;
 #[path = "../src/paths.rs"]
 mod paths;
+#[path = "../src/plan.rs"]
+mod plan;
 #[path = "../src/registry.rs"]
 mod registry;
 #[path = "../src/selection.rs"]
 mod selection;
-#[path = "../src/plan.rs"]
-mod plan;
 
 use std::path::PathBuf;
 
 use plan::{InstallOptions, InstallPlan, PlanExclusion};
 use registry::{
-    EntryCategory, EntryKind, LifecycleAction, RegistryEntryV2, Safety, INSTALL_CATEGORIES,
+    EntryCategory, EntryKind, INSTALL_CATEGORIES, LifecycleAction, RegistryEntryV2, Safety,
 };
 
 fn entry(
@@ -101,7 +101,10 @@ fn rust_binary_service_is_installable_without_planning_a_service_start() {
     .unwrap();
 
     assert_eq!(
-        plan.selected.iter().map(|artifact| artifact.id.as_str()).collect::<Vec<_>>(),
+        plan.selected
+            .iter()
+            .map(|artifact| artifact.id.as_str())
+            .collect::<Vec<_>>(),
         ["doc-viewer"]
     );
     assert!(plan.excluded.is_empty());
@@ -149,7 +152,10 @@ fn all_selects_only_installable_entries_and_reports_every_exclusion_reason() {
     .unwrap();
 
     assert_eq!(
-        plan.selected.iter().map(|artifact| artifact.id.as_str()).collect::<Vec<_>>(),
+        plan.selected
+            .iter()
+            .map(|artifact| artifact.id.as_str())
+            .collect::<Vec<_>>(),
         ["doc-viewer"]
     );
     assert_eq!(

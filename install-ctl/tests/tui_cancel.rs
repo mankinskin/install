@@ -12,9 +12,7 @@ use support::bounded_pty::BoundedPty;
 #[test]
 fn escape_cancels_before_any_target_write() {
     let root = tempfile::tempdir().unwrap();
-    let mut command = portable_pty::CommandBuilder::new(
-        env!("CARGO_BIN_EXE_install-ctl"),
-    );
+    let mut command = portable_pty::CommandBuilder::new(env!("CARGO_BIN_EXE_install-ctl"));
     command.arg("tui");
     command.arg("--root");
     command.arg(root.path());
@@ -25,7 +23,8 @@ fn escape_cancels_before_any_target_write() {
             .and_then(std::path::Path::parent)
             .unwrap(),
     );
-    let mut harness = BoundedPty::spawn(command, 100, 30, std::time::Duration::from_secs(30)).unwrap();
+    let mut harness =
+        BoundedPty::spawn(command, 100, 30, std::time::Duration::from_secs(30)).unwrap();
     if let Err(error) = harness.wait_for_text("Artifact categories") {
         panic!(
             "TUI did not render its bounded startup marker: {error}; screen={:?}",

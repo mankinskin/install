@@ -38,7 +38,10 @@ fn report_keeps_actual_action_evidence_and_detects_failures() {
 
     assert!(report.has_failures());
     assert_eq!(report.actions.len(), 4);
-    assert_eq!(report.actions[0].target, PathBuf::from("C:/root/bin/tool-one.exe"));
+    assert_eq!(
+        report.actions[0].target,
+        PathBuf::from("C:/root/bin/tool-one.exe")
+    );
     assert_eq!(report.actions[1].status, ActionStatus::Unchanged);
     assert_eq!(report.actions[2].detail, "hook entries are inspect-only");
 }

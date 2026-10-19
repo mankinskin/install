@@ -99,7 +99,9 @@ bin = "install-ctl"
 }
 
 fn binary(path_root: &Path, name: &str) -> PathBuf {
-    path_root.join("bin").join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+    path_root
+        .join("bin")
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
 }
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
@@ -143,7 +145,9 @@ fn run_bounded(command: &mut Command, label: &str) -> Output {
             break status;
         }
         if Instant::now() >= deadline {
-            child.kill().unwrap_or_else(|error| panic!("could not kill timed-out {label}: {error}"));
+            child
+                .kill()
+                .unwrap_or_else(|error| panic!("could not kill timed-out {label}: {error}"));
             child.wait().expect("could not reap timed-out child");
             // Reaping closes both pipes; wait a short, fixed interval so the
             // two reader threads cannot outlive this failing test unchecked.
@@ -188,7 +192,11 @@ fn run_scripted_output(fixture: &Fixture) -> Output {
 
 fn run_scripted(fixture: &Fixture) -> String {
     let output = run_scripted_output(fixture);
-    assert!(output.status.success(), "scripted stderr={}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "scripted stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout).unwrap()
 }
 
@@ -255,7 +263,10 @@ fn run_tui_self_with_root_edit(fixture: &Fixture) -> String {
     let mut installed = Command::new(binary(&edited_root, "install-ctl"));
     let result = run_bounded(&mut installed, "edited-root self fixture");
     assert!(result.status.success());
-    assert_eq!(String::from_utf8(result.stdout).unwrap().trim(), "self-sentinel");
+    assert_eq!(
+        String::from_utf8(result.stdout).unwrap().trim(),
+        "self-sentinel"
+    );
     output
 }
 
@@ -314,7 +325,10 @@ fn warmup_compile_failure_renders_failed_action_before_nonzero_exit() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(!output.status.success(), "invalid fixture source unexpectedly installed");
+    assert!(
+        !output.status.success(),
+        "invalid fixture source unexpectedly installed"
+    );
     assert!(
         rendered.contains("failed: tool-one"),
         "failure must be rendered as an action before nonzero exit; output={rendered}"

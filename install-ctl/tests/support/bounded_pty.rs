@@ -33,14 +33,33 @@ pub struct BoundedPty {
 }
 
 impl BoundedPty {
-    pub fn spawn(command: CommandBuilder, width: u16, height: u16, timeout: Duration) -> Result<Self, String> {
+    pub fn spawn(
+        command: CommandBuilder,
+        width: u16,
+        height: u16,
+        timeout: Duration,
+    ) -> Result<Self, String> {
         let system = portable_pty::native_pty_system();
         let pair = system
-            .openpty(PtySize { rows: height, cols: width, pixel_width: 0, pixel_height: 0 })
+            .openpty(PtySize {
+                rows: height,
+                cols: width,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .map_err(|error| error.to_string())?;
-        let mut reader = pair.master.try_clone_reader().map_err(|error| error.to_string())?;
-        let writer = pair.master.take_writer().map_err(|error| error.to_string())?;
-        let child = pair.slave.spawn_command(command).map_err(|error| error.to_string())?;
+        let mut reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|error| error.to_string())?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|error| error.to_string())?;
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .map_err(|error| error.to_string())?;
         let (sender, output) = mpsc::channel();
         let reader_thread = thread::spawn(move || {
             let mut buffer = vec![0; 8192];
@@ -80,7 +99,11 @@ impl BoundedPty {
             .ok_or_else(|| "PTY writer is unavailable".to_string())?
             .write_all(&bytes)
             .map_err(|error| error.to_string())?;
-        self.writer.as_mut().unwrap().flush().map_err(|error| error.to_string())?;
+        self.writer
+            .as_mut()
+            .unwrap()
+            .flush()
+            .map_err(|error| error.to_string())?;
         self.wait_for_repaint(Instant::now() + Duration::from_millis(250))
     }
 
@@ -151,8 +174,13 @@ impl BoundedPty {
     pub fn wait_exit(&mut self) -> Result<ExitStatus, String> {
         let deadline = Instant::now() + self.timeout;
         loop {
-            if let Some(status) = self.child.as_mut().ok_or_else(|| "PTY child is unavailable".to_string())?
-                .try_wait().map_err(|error| error.to_string())? {
+            if let Some(status) = self
+                .child
+                .as_mut()
+                .ok_or_else(|| "PTY child is unavailable".to_string())?
+                .try_wait()
+                .map_err(|error| error.to_string())?
+            {
                 return Ok(status);
             }
             if Instant::now() >= deadline {
@@ -164,7 +192,10 @@ impl BoundedPty {
 
     fn receive_until(&mut self, deadline: Instant) -> Result<(), String> {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match self.output.recv_timeout(remaining.min(Duration::from_millis(25))) {
+        match self
+            .output
+            .recv_timeout(remaining.min(Duration::from_millis(25)))
+        {
             Ok(Ok(bytes)) => self.feed(&bytes),
             Ok(Err(error)) => return Err(format!("PTY reader failed: {error}")),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -178,7 +209,9 @@ impl BoundedPty {
         match self.output.recv_timeout(remaining) {
             Ok(Ok(bytes)) => self.feed(&bytes),
             Ok(Err(error)) => return Err(format!("PTY reader failed: {error}")),
-            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
+                return Ok(());
+            }
         }
         self.drain_repaint()
     }
@@ -216,21 +249,36 @@ impl BoundedPty {
 
     pub fn finish(&mut self) -> Result<(), String> {
         if let Some(child) = self.child.as_mut() {
-            if child.try_wait().map_err(|error| error.to_string())?.is_none() {
+            if child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
                 child.kill().map_err(|error| error.to_string())?;
             }
         }
         let deadline = Instant::now() + self.timeout;
-        while self.reader.as_ref().is_some_and(|reader| !reader.is_finished()) && Instant::now() < deadline {
+        while self
+            .reader
+            .as_ref()
+            .is_some_and(|reader| !reader.is_finished())
+            && Instant::now() < deadline
+        {
             self.pair.take();
             self.writer.take();
             self.receive_until(deadline)?;
         }
-        if self.reader.as_ref().is_some_and(|reader| !reader.is_finished()) {
+        if self
+            .reader
+            .as_ref()
+            .is_some_and(|reader| !reader.is_finished())
+        {
             return Err("PTY reader did not stop after child termination".into());
         }
         if let Some(reader) = self.reader.take() {
-            reader.join().map_err(|_| "PTY reader panicked".to_string())?;
+            reader
+                .join()
+                .map_err(|_| "PTY reader panicked".to_string())?;
         }
         if let Some(child) = self.child.as_mut() {
             let _ = child.wait();

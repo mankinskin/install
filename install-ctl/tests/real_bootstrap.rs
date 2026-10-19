@@ -14,7 +14,12 @@ use sha2::{Digest, Sha256};
 use support::bounded_pty::BoundedPty;
 
 const IDS: [&str; 6] = [
-    "ticket", "spec-cli", "session-cli", "test-cli", "feedback-cli", "audit-cli",
+    "ticket",
+    "spec-cli",
+    "session-cli",
+    "test-cli",
+    "feedback-cli",
+    "audit-cli",
 ];
 
 #[derive(Deserialize)]
@@ -35,10 +40,17 @@ fn documented_six_tools_match_between_scripted_and_native_pty() {
         .expect("set INSTALL_CTL_ACCEPTANCE_DIR to a new evidence directory");
     let evidence = Path::new(&evidence);
     fs::create_dir_all(evidence).unwrap();
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     let scripted_root = evidence.join("scripted");
     let tui_root = evidence.join("tui");
-    assert!(!scripted_root.exists() && !tui_root.exists(), "use fresh installation roots");
+    assert!(
+        !scripted_root.exists() && !tui_root.exists(),
+        "use fresh installation roots"
+    );
     let installer = env!("CARGO_BIN_EXE_install-ctl");
     let log = fs::File::create(evidence.join("scripted.log")).unwrap();
     let mut child = Command::new(installer)
@@ -54,7 +66,10 @@ fn documented_six_tools_match_between_scripted_and_native_pty() {
     let deadline = Instant::now() + Duration::from_secs(360);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
-            assert!(status.success(), "scripted install failed; inspect scripted.log");
+            assert!(
+                status.success(),
+                "scripted install failed; inspect scripted.log"
+            );
             break;
         }
         if Instant::now() >= deadline {
@@ -67,7 +82,11 @@ fn documented_six_tools_match_between_scripted_and_native_pty() {
 
     let registry: Registry =
         toml::from_str(&fs::read_to_string(repo.join("install/artifacts.toml")).unwrap()).unwrap();
-    let cli: Vec<_> = registry.artifact.iter().filter(|entry| entry.category == "cli").collect();
+    let cli: Vec<_> = registry
+        .artifact
+        .iter()
+        .filter(|entry| entry.category == "cli")
+        .collect();
     for id in IDS {
         assert_eq!(cli.iter().filter(|entry| entry.id == id).count(), 1);
     }
@@ -96,7 +115,10 @@ fn documented_six_tools_match_between_scripted_and_native_pty() {
     let review = pty.screen_contents();
     fs::write(evidence.join("review.txt"), &review).unwrap();
     for id in IDS {
-        assert!(review.contains(&format!("install: {id} [")), "review omitted {id}");
+        assert!(
+            review.contains(&format!("install: {id} [")),
+            "review omitted {id}"
+        );
     }
     assert_eq!(review.matches("install: ").count(), IDS.len());
     pty.send_key(KeyCode::Char('y')).unwrap();
@@ -107,7 +129,10 @@ fn documented_six_tools_match_between_scripted_and_native_pty() {
     let status = pty.wait_exit().unwrap();
     fs::write(evidence.join("tui-result.txt"), pty.screen_contents()).unwrap();
     pty.finish().unwrap();
-    assert!(status.success(), "TUI install failed; inspect tui-result.txt");
+    assert!(
+        status.success(),
+        "TUI install failed; inspect tui-result.txt"
+    );
 
     let expected: BTreeSet<_> = ["ticket", "spec", "session", "test", "feedback", "audit"]
         .into_iter()
@@ -119,7 +144,12 @@ fn documented_six_tools_match_between_scripted_and_native_pty() {
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect();
-        assert_eq!(found, expected, "unexpected artifact set at {}", root.display());
+        assert_eq!(
+            found,
+            expected,
+            "unexpected artifact set at {}",
+            root.display()
+        );
     }
     for name in &expected {
         let mut help_outputs = Vec::new();
@@ -127,9 +157,17 @@ fn documented_six_tools_match_between_scripted_and_native_pty() {
             let binary = root.join("bin").join(name);
             let bytes = fs::read(&binary).unwrap();
             let output = Command::new(&binary).arg("--help").output().unwrap();
-            assert!(output.status.success(), "{} --help failed", binary.display());
+            assert!(
+                output.status.success(),
+                "{} --help failed",
+                binary.display()
+            );
             let help = String::from_utf8(output.stdout).unwrap();
-            assert!(help.contains("Usage:"), "{} omitted usage", binary.display());
+            assert!(
+                help.contains("Usage:"),
+                "{} omitted usage",
+                binary.display()
+            );
             help_outputs.push(help.clone());
             records.push(serde_json::json!({
                 "path": binary,
@@ -138,7 +176,10 @@ fn documented_six_tools_match_between_scripted_and_native_pty() {
                 "help": help,
             }));
         }
-        assert_eq!(help_outputs[0], help_outputs[1], "help contract mismatch: {name}");
+        assert_eq!(
+            help_outputs[0], help_outputs[1],
+            "help contract mismatch: {name}"
+        );
     }
     fs::write(
         evidence.join("readback.json"),
