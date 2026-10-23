@@ -18,15 +18,15 @@ fn transport_worker() {
     }
 }
 
-struct Repository {
-    root: TempDir,
-    repo: PathBuf,
-    head: String,
-    selected: String,
-    unrelated: String,
+pub(crate) struct Repository {
+    pub(crate) root: TempDir,
+    pub(crate) repo: PathBuf,
+    pub(crate) head: String,
+    pub(crate) selected: String,
+    pub(crate) unrelated: String,
 }
 
-fn git(cwd: &Path, args: &[&str]) -> String {
+pub(crate) fn git(cwd: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(cwd)
         .args(args)
@@ -41,11 +41,11 @@ fn git(cwd: &Path, args: &[&str]) -> String {
 }
 
 impl Repository {
-    fn new(filter: bool) -> Self {
+    pub(crate) fn new(filter: bool) -> Self {
         Self::with_format(filter, "sha1")
     }
 
-    fn with_format(filter: bool, format: &str) -> Self {
+    pub(crate) fn with_format(filter: bool, format: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
         let repo = root.path().join("repo.git");
         fs::create_dir(&repo).unwrap();
@@ -216,7 +216,7 @@ fn transport_probe() {
     }
 }
 
-struct Server(Child);
+pub(crate) struct Server(pub(crate) Child);
 
 impl Drop for Server {
     fn drop(&mut self) {
@@ -247,11 +247,11 @@ fn script() -> PathBuf {
         .join("fixture.py")
 }
 
-fn http_server(repository: &Repository, auth: bool) -> (Server, String, PathBuf) {
+pub(crate) fn http_server(repository: &Repository, auth: bool) -> (Server, String, PathBuf) {
     http_server_mode(repository, if auth { "auth" } else { "anonymous" })
 }
 
-fn http_server_mode(repository: &Repository, mode: &str) -> (Server, String, PathBuf) {
+pub(crate) fn http_server_mode(repository: &Repository, mode: &str) -> (Server, String, PathBuf) {
     let log = repository.root.path().join("requests.jsonl");
     let mut child = Command::new("python")
         .arg(script())

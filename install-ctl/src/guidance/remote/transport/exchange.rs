@@ -234,6 +234,9 @@ pub(super) fn run(request: Request, directory: &Path) -> Result<Response, String
         return Err("selective transport: unsupported Git object format".into());
     }
     match request.operation {
+        Operation::Authorize => Ok(Response::Authorized {
+            repository_key: config::repository_key(&source)?,
+        }),
         Operation::Head => {
             let mut refs = transport
                 .invoke(
@@ -254,13 +257,18 @@ pub(super) fn run(request: Request, directory: &Path) -> Result<Response, String
                     (name == "HEAD").then_some(oid).flatten()
                 })
                 .ok_or("selective transport: repository HEAD is missing or unborn")?;
-            Ok(Response::Head(oid.to_string()))
+            Ok(Response::Head {
+                oid: oid.to_string(),
+                repository_key: config::repository_key(&source)?,
+            })
         }
         operation => {
             let (oid, metadata) = match operation {
                 Operation::Metadata(oid) => (oid, true),
                 Operation::Blob(oid) => (oid, false),
-                Operation::Head => return Err("selective transport: unexpected operation".into()),
+                Operation::Head | Operation::Authorize => {
+                    return Err("selective transport: unexpected operation".into());
+                }
             };
             let wanted = gix_hash::ObjectId::from_hex(oid.as_bytes())
                 .map_err(|_| "selective transport: invalid wanted object ID")?;

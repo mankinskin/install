@@ -48,6 +48,11 @@ def serve(root, log, authentication):
                 "second_header": self.headers.get("X-Transport-Second"),
                 "body": body.decode("ascii", errors="replace"),
             })
+            if authentication == "mutable-access" and os.path.exists(os.path.join(root, "deny-access")):
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if authentication == "stall-handshake" or (
                 authentication == "stall-fetch" and b"command=fetch" in body
             ):

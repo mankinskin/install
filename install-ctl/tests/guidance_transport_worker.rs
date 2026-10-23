@@ -92,7 +92,7 @@ mod guidance {
                 git(repo, &["commit", "--quiet", "-m", "fixture"]);
                 let head = git(repo, &["rev-parse", "HEAD"]);
                 let selected = git(repo, &["rev-parse", "HEAD:selected.md"]);
-                assert_eq!(exchange(repo, json!("Head"))["Head"], head);
+                assert_eq!(exchange(repo, json!("Head"))["Head"]["oid"], head);
                 let metadata = exchange(repo, json!({"Metadata": head}));
                 let metadata = metadata["Objects"].as_array().unwrap();
                 assert_eq!(metadata.len(), 2);

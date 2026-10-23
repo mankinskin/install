@@ -1,11 +1,11 @@
 //! Selective Git object transfer, isolated so deadlines also cancel transport children.
 
-mod config;
+pub(super) mod config;
 mod exchange;
 mod objects;
 mod process;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,16 @@ pub struct ReceivedObject {
     pub oid: String,
     pub kind: String,
     pub data: Vec<u8>,
+}
+
+impl ReceivedObject {
+    pub(super) fn verify(&self) -> Result<(), String> {
+        objects::verify(self)
+    }
+}
+
+pub(super) fn validate_metadata(objects: &[ReceivedObject], root: &str) -> Result<(), String> {
+    objects::validate_metadata(objects, root)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -25,19 +35,22 @@ pub(super) struct Request {
 #[derive(Serialize, Deserialize)]
 pub(super) enum Operation {
     Head,
+    Authorize,
     Metadata(String),
     Blob(String),
 }
 
 #[derive(Serialize, Deserialize)]
 pub(super) enum Response {
-    Head(String),
+    Head { oid: String, repository_key: String },
+    Authorized { repository_key: String },
     Objects(Vec<ReceivedObject>),
 }
 
 pub struct SelectiveTransport {
     source: String,
     head: String,
+    repository_key: String,
 }
 
 impl SelectiveTransport {
@@ -46,12 +59,37 @@ impl SelectiveTransport {
             source: source.to_owned(),
             operation: Operation::Head,
         })? {
-            Response::Head(head) => Ok(Self {
+            Response::Head {
+                oid: head,
+                repository_key,
+            } => Ok(Self {
                 source: source.to_owned(),
                 head,
+                repository_key,
             }),
-            Response::Objects(_) => Err("selective transport: invalid HEAD response".into()),
+            _ => Err("selective transport: invalid HEAD response".into()),
         }
+    }
+
+    pub fn pinned(source: &str, revision: &str) -> Result<Self, String> {
+        let revision = gix_hash::ObjectId::from_hex(revision.as_bytes())
+            .map_err(|_| "selective transport: invalid pinned revision")?
+            .to_string();
+        match process::run(Request {
+            source: source.to_owned(),
+            operation: Operation::Authorize,
+        })? {
+            Response::Authorized { repository_key } => Ok(Self {
+                source: source.to_owned(),
+                head: revision,
+                repository_key,
+            }),
+            _ => Err("selective transport: invalid authorization response".into()),
+        }
+    }
+
+    pub fn repository_key(&self) -> &str {
+        &self.repository_key
     }
 
     pub fn head_oid(&self) -> &str {
@@ -78,7 +116,7 @@ impl SelectiveTransport {
             operation,
         })? {
             Response::Objects(objects) => Ok(objects),
-            Response::Head(_) => Err("selective transport: invalid object response".into()),
+            _ => Err("selective transport: invalid object response".into()),
         }
     }
 }

@@ -4,6 +4,36 @@ use gix_transport::client::blocking_io::http::{
 };
 use std::{path::PathBuf, process::Command, time::Duration};
 
+pub(crate) fn repository_key(source: &str) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut url = gix_url::parse(source)
+        .map_err(|_| "selective transport: cannot identify repository URL")?;
+    url.set_user(None);
+    url.set_password(None);
+    if matches!(url.scheme, gix_url::Scheme::Http | gix_url::Scheme::Https) {
+        url.path = url.path_query_fragment().path.to_owned();
+        while url.path.len() > 1 && url.path.last() == Some(&b'/') {
+            url.path.pop();
+        }
+    }
+    url.canonicalize(
+        &std::env::current_dir()
+            .map_err(|_| "selective transport: cannot resolve source directory")?,
+    )
+    .map_err(|_| "selective transport: cannot canonicalize repository identity")?;
+    if matches!(
+        (&url.scheme, url.port),
+        (gix_url::Scheme::Http, Some(80))
+            | (gix_url::Scheme::Https, Some(443))
+            | (gix_url::Scheme::Ssh, Some(22))
+            | (gix_url::Scheme::Git, Some(9418))
+    ) {
+        url.port = None;
+    }
+    url.serialize_alternative_form = false;
+    Ok(format!("{:x}", Sha256::digest(&url.to_bstring()[..])))
+}
+
 pub(super) fn source(source: &str) -> Result<String, String> {
     let output = Command::new("git")
         .args(["ls-remote", "--get-url", "--", source])
