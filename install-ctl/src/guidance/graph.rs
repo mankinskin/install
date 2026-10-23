@@ -5,6 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+#[path = "graph/links.rs"]
+mod links;
+pub use links::{LinkClass, classify_link, extract_links, resolve_relative};
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
@@ -53,99 +57,6 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-/// Extract inline Markdown link targets (`[label](target)`), in source
-/// order. Titles (`(target "title")`) are stripped from the target.
-pub fn extract_links(text: &str) -> Vec<String> {
-    let mut links = Vec::new();
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'[' {
-            if let Some(close_bracket_rel) = text[i..].find(']') {
-                let after_label = i + close_bracket_rel + 1;
-                if text[after_label..].starts_with('(') {
-                    let paren_start = after_label + 1;
-                    if let Some(close_paren_rel) = text[paren_start..].find(')') {
-                        let raw_target = &text[paren_start..paren_start + close_paren_rel];
-                        let target = raw_target.split_whitespace().next().unwrap_or("");
-                        if !target.is_empty() {
-                            links.push(target.to_string());
-                        }
-                        i = paren_start + close_paren_rel + 1;
-                        continue;
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-    links
-}
-
-/// Classification of a single extracted link target relative to the source
-/// root the referencing artifact lives in. Guidance/Profile carry no escape
-/// information themselves — root-escape detection needs the referencing
-/// file's directory and is done separately by [`resolve_relative`].
-pub enum LinkClass {
-    /// `http(s)://`, `mailto:`, or a fragment-only `#anchor` reference.
-    External,
-    /// Ends in `.md`.
-    Guidance,
-    /// Ends in `.toml`.
-    Profile,
-    /// A relative link that is not `.md`/`.toml`; not part of the guidance
-    /// corpus, recorded as skipped rather than added to the closure.
-    NonGuidance(String),
-    /// An absolute path or drive-qualified path.
-    AbsoluteSource(String),
-}
-
-pub fn classify_link(raw: &str) -> LinkClass {
-    if raw.starts_with("http://")
-        || raw.starts_with("https://")
-        || raw.starts_with("mailto:")
-        || raw.starts_with('#')
-    {
-        return LinkClass::External;
-    }
-    // Strip a trailing fragment before resolving the target path.
-    let path_part = raw.split('#').next().unwrap_or(raw);
-    if path_part.is_empty() {
-        return LinkClass::External;
-    }
-    if path_part.starts_with('/')
-        || path_part.starts_with('\\')
-        || (path_part.len() > 1 && path_part.as_bytes()[1] == b':')
-    {
-        return LinkClass::AbsoluteSource(path_part.to_string());
-    }
-    if path_part.ends_with(".md") {
-        LinkClass::Guidance
-    } else if path_part.ends_with(".toml") {
-        LinkClass::Profile
-    } else {
-        LinkClass::NonGuidance(path_part.to_string())
-    }
-}
-
-/// Resolve `raw` (possibly containing `.`/`..`) against an implicit root,
-/// returning `None` if it would escape the root. `base_dir` is the
-/// repo-relative directory of the file containing the link.
-pub fn resolve_relative(base_dir: &str, raw: &str) -> Option<String> {
-    let path_part = raw.split('#').next().unwrap_or(raw);
-    let mut stack: Vec<&str> = base_dir.split('/').filter(|s| !s.is_empty()).collect();
-    for seg in path_part.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                stack.pop()?;
-            }
-            other => stack.push(other),
-        }
-    }
-    Some(stack.join("/"))
-}
-
 /// A node the closure can visit: either an existing on-disk source file or a
 /// recipe-produced artifact whose bytes are read from an input file.
 pub trait ContentSource {
@@ -167,9 +78,45 @@ pub struct ClosureResult {
     pub skipped_external: BTreeSet<String>,
 }
 
+/// Missing content is distinct from a failed read or acquisition.
+pub trait FallibleContentSource {
+    type Error;
+    fn read_text(&mut self, id: &str) -> Result<Option<String>, Self::Error>;
+    fn exists(&mut self, id: &str) -> Result<bool, Self::Error>;
+    fn escapes_root(&mut self, id: &str) -> Result<bool, Self::Error>;
+}
+
+struct LocalSource<'a>(&'a dyn ContentSource);
+
+impl FallibleContentSource for LocalSource<'_> {
+    type Error = std::convert::Infallible;
+
+    fn read_text(&mut self, id: &str) -> Result<Option<String>, Self::Error> {
+        Ok(self.0.read_text(id))
+    }
+
+    fn exists(&mut self, id: &str) -> Result<bool, Self::Error> {
+        Ok(self.0.exists(id))
+    }
+
+    fn escapes_root(&mut self, id: &str) -> Result<bool, Self::Error> {
+        Ok(self.0.escapes_root(id))
+    }
+}
+
 /// Compute the deterministic transitive closure over `roots` by following
 /// `.md` and `.toml` links discovered in each visited node's text.
 pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureResult {
+    match compute_closure_fallible(roots, &mut LocalSource(source)) {
+        Ok(closure) => closure,
+        Err(impossible) => match impossible {},
+    }
+}
+
+pub fn compute_closure_fallible<S: FallibleContentSource + ?Sized>(
+    roots: &[String],
+    source: &mut S,
+) -> Result<ClosureResult, S::Error> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum State {
         InProgress,
@@ -182,21 +129,21 @@ pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureR
     let mut skipped_external: BTreeSet<String> = BTreeSet::new();
     let mut artifacts: BTreeSet<String> = BTreeSet::new();
 
-    fn visit(
+    fn visit<S: FallibleContentSource + ?Sized>(
         id: &str,
-        source: &dyn ContentSource,
+        source: &mut S,
         state: &mut BTreeMap<String, State>,
         edges: &mut Vec<DependencyEdge>,
         diagnostics: &mut Vec<Diagnostic>,
         skipped_external: &mut BTreeSet<String>,
         artifacts: &mut BTreeSet<String>,
-    ) {
+    ) -> Result<(), S::Error> {
         state.insert(id.to_string(), State::InProgress);
         artifacts.insert(id.to_string());
 
         let base_dir = id.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
         let text = if id.ends_with(".md") {
-            source.read_text(id)
+            source.read_text(id)?
         } else {
             None
         };
@@ -269,7 +216,7 @@ pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureR
                             });
                         }
                         None => {
-                            if source.escapes_root(&target) {
+                            if source.escapes_root(&target)? {
                                 diagnostics.push(Diagnostic {
                                     code: DiagnosticCode::SymlinkEscape,
                                     subject: target.clone(),
@@ -285,7 +232,7 @@ pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureR
                                 });
                                 continue;
                             }
-                            if !source.exists(&target) {
+                            if !source.exists(&target)? {
                                 diagnostics.push(Diagnostic {
                                     code: DiagnosticCode::MissingDependency,
                                     subject: target.clone(),
@@ -315,7 +262,7 @@ pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureR
                                 diagnostics,
                                 skipped_external,
                                 artifacts,
-                            );
+                            )?;
                         }
                     }
                 }
@@ -323,6 +270,7 @@ pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureR
         }
 
         state.insert(id.to_string(), State::Done);
+        Ok(())
     }
 
     let mut sorted_roots: Vec<String> = roots.to_vec();
@@ -332,7 +280,7 @@ pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureR
         if state.contains_key(root) {
             continue;
         }
-        if source.escapes_root(root) {
+        if source.escapes_root(root)? {
             diagnostics.push(Diagnostic {
                 code: DiagnosticCode::SymlinkEscape,
                 subject: root.clone(),
@@ -340,7 +288,7 @@ pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureR
             });
             continue;
         }
-        if !source.exists(root) {
+        if !source.exists(root)? {
             diagnostics.push(Diagnostic {
                 code: DiagnosticCode::MissingDependency,
                 subject: root.clone(),
@@ -356,7 +304,7 @@ pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureR
             &mut diagnostics,
             &mut skipped_external,
             &mut artifacts,
-        );
+        )?;
     }
 
     edges.sort();
@@ -364,12 +312,12 @@ pub fn compute_closure(roots: &[String], source: &dyn ContentSource) -> ClosureR
     diagnostics.sort();
     diagnostics.dedup();
 
-    ClosureResult {
+    Ok(ClosureResult {
         artifacts,
         edges,
         diagnostics,
         skipped_external,
-    }
+    })
 }
 
 #[cfg(test)]
