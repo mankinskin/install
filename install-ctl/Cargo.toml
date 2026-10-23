@@ -13,6 +13,10 @@ audit-api  = { git = "https://github.com/mankinskin/audit", branch = "main" }
 clap       = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 dirs       = "5"
+gix-hash = { version = "0.28", features = ["sha1", "sha256"] }
+gix-object = "0.66"
+gix-protocol = { version = "0.67", features = ["blocking-client", "sha1", "sha256"] }
+gix-transport = { version = "0.61", features = ["blocking-client", "http-client-curl-rust-tls"] }
 ratatui = "0.29"
 jsonc-parser = { version = "0.34", features = ["cst"] }
 serde      = { version = "1", features = ["derive"] }
@@ -23,9 +27,13 @@ tempfile   = "3"
 toml       = "0.8"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
+gix-transport = { version = "0.61", features = ["http-client-insecure-credentials"] }
 portable-pty = "0.8"
 ratatui-testlib = { version = "0.1", features = ["ratatui-helpers"] }
 vt100 = "0.15"

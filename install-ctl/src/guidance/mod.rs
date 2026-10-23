@@ -14,6 +14,7 @@ pub mod install;
 pub mod links;
 pub mod plan;
 pub mod profile;
+pub mod remote;
 pub mod rewrite;
 pub mod uninstall;
 

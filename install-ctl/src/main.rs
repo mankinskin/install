@@ -171,6 +171,9 @@ enum Command {
 const SHADOW_ENV_VAR: &str = "INSTALL_CTL_SHADOW";
 
 fn main() {
+    if guidance::remote::transport::run_worker_if_requested() {
+        return;
+    }
     cleanup_shadow_copy_if_running_from_one();
 
     let cli = Cli::parse();
