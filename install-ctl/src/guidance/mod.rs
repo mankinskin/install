@@ -8,9 +8,10 @@
 
 pub mod autofix;
 pub mod destination;
-pub mod git;
+mod get;
 pub mod graph;
 pub mod install;
+mod link_command;
 pub mod links;
 pub mod plan;
 pub mod profile;
@@ -21,16 +22,15 @@ pub mod uninstall;
 #[cfg(test)]
 mod tests;
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use clap::{Args, Subcommand};
 
 use self::destination::DestinationPaths;
-use self::plan::{PlanInputs, build_plan, build_plan_with_profile, render_text};
-use self::profile::{DestinationScopeKind, load_profile, synthesize_direct_profile};
+use self::plan::{PlanInputs, build_plan, render_text};
+use self::profile::DestinationScopeKind;
+#[cfg(test)]
+use get::{run_get, run_get_with_reporter};
 
 type ProgressReporter<'a> = dyn Fn(&str) + 'a;
 
@@ -54,10 +54,9 @@ pub enum GuidanceCmd {
     /// `--plan` is read-only; `--apply` is the only mutation path and
     /// requires `--yes`.
     Autofix(GuidanceAutofixArgs),
-    /// One-command fetch + select + install: clones `<repository-url>` with
-    /// the system `git` binary, resolves an explicit or synthesized
-    /// profile, plans, and installs into `--target` (default `.`), then
-    /// deletes the managed checkout unless `--keep-checkout` is given.
+    /// Fetch only selected guidance and required references, then install.
+    /// Submodules are read lazily at pinned revisions. Requires selective
+    /// Git protocol v2/filter support; never falls back to a full clone.
     Get(GuidanceGetArgs),
 }
 
@@ -161,15 +160,15 @@ pub struct GuidanceArgs {
 
 #[derive(Args)]
 pub struct GuidanceGetArgs {
-    /// Source repository to clone (any URL `git clone` accepts).
+    /// Git source (HTTP(S), SSH, Git, local/file); requires protocol v2/filter.
     pub repository_url: String,
     /// Corpus item ids to select. Resolved against `--profile`'s declared
     /// corpus when given; otherwise each value is a bare repo-relative
     /// source path, installed directly (no profile file required).
     #[arg(long = "select", required = true)]
     pub select: Vec<String>,
-    /// Path to a guidance profile TOML file, resolved inside the freshly
-    /// cloned checkout (not the caller's local filesystem). Omit to install
+    /// Repository-relative guidance profile TOML file (not the caller's
+    /// local filesystem). Omit to install
     /// `--select` paths directly without authoring a profile.
     #[arg(long)]
     pub profile: Option<PathBuf>,
@@ -185,8 +184,8 @@ pub struct GuidanceGetArgs {
     /// Override the profile's declared explicit destination path.
     #[arg(long)]
     pub destination_path: Option<PathBuf>,
-    /// Keep the managed clone directory after the command finishes instead
-    /// of deleting it, and print its path.
+    /// Keep the invocation's selected-source snapshot on success or error
+    /// and print its path. Not a Git checkout; never exposes the shared cache.
     #[arg(long)]
     pub keep_checkout: bool,
     /// Emit the plan as JSON instead of human-readable text.
@@ -196,8 +195,8 @@ pub struct GuidanceGetArgs {
 
 pub fn run(command: GuidanceCmd) -> Result<(), String> {
     match command {
-        GuidanceCmd::Link(args) => run_links(args, links::LinkOperation::Link),
-        GuidanceCmd::Unlink(args) => run_links(args, links::LinkOperation::Unlink),
+        GuidanceCmd::Link(args) => link_command::run(args, links::LinkOperation::Link),
+        GuidanceCmd::Unlink(args) => link_command::run(args, links::LinkOperation::Unlink),
         GuidanceCmd::Plan(args) => {
             let plan = build_plan_from_args(&args)?;
             print_plan(&plan, args.json);
@@ -231,248 +230,8 @@ pub fn run(command: GuidanceCmd) -> Result<(), String> {
             Ok(())
         }
         GuidanceCmd::Autofix(args) => run_autofix(&args),
-        GuidanceCmd::Get(args) => {
-            let (result, checkout_path) = run_get(&args, git::clone_shallow);
-            if args.keep_checkout {
-                println!("checkout kept at: {}", checkout_path.display());
-            }
-            result
-        }
+        GuidanceCmd::Get(args) => get::run(&args),
     }
-}
-
-fn run_links(args: GuidanceLinkArgs, operation: links::LinkOperation) -> Result<(), String> {
-    if args.harness == links::Harness::CopilotCli && (!args.sources.is_empty() || args.migrate) {
-        return Err("--source and --migrate are only supported with --harness vscode".to_owned());
-    }
-    if operation == links::LinkOperation::Unlink && args.migrate {
-        return Err("--migrate is only valid with guidance link".to_owned());
-    }
-    if args.harness == links::Harness::Vscode {
-        let plan =
-            match links::settings::build_plan(&args.repo, &args.sources, operation, args.migrate) {
-                Ok(plan) => plan,
-                Err(error) => {
-                    if args.json {
-                        println!(
-                            "{}",
-                            serde_json::json!({"plan": null, "applied": false, "error": error})
-                        );
-                    }
-                    return Err(error);
-                }
-            };
-        let result = if !plan.links.diagnostics.is_empty() {
-            Err(format!(
-                "blocking link plan: {}",
-                plan.links.diagnostics.join("; ")
-            ))
-        } else if args.apply {
-            links::settings::apply_plan(&plan)
-        } else {
-            Ok(())
-        };
-        if args.json {
-            let report = serde_json::json!({
-                "plan": &plan,
-                "applied": args.apply && result.is_ok(),
-                "error": result.as_ref().err(),
-            });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&report)
-                    .map_err(|error| format!("cannot serialize link report: {error}"))?
-            );
-        } else {
-            for entry in &plan.links.entries {
-                println!(
-                    "{:?}: {} -> {} (source {})",
-                    entry.action,
-                    entry.destination,
-                    entry.target.display(),
-                    entry.source
-                );
-            }
-            for source in &plan.links.skipped_sources {
-                println!("Skipped missing source: {source}");
-            }
-            for diagnostic in &plan.links.diagnostics {
-                println!("Blocked: {diagnostic}");
-            }
-            for change in &plan.configuration_changes {
-                println!("Configuration: {change}");
-            }
-            for (destination, target) in &plan.links.migrations {
-                println!(
-                    "Migrate legacy alias: {destination} -> {} into named links",
-                    target.display()
-                );
-            }
-            if args.apply && result.is_ok() {
-                println!("Applied VS Code links, discovery settings, and ownership");
-            }
-        }
-        return result;
-    }
-    let plan = links::build_link_plan(&args.repo, args.harness, operation)?;
-    let result = if !plan.diagnostics.is_empty() {
-        Err(format!(
-            "blocking link plan: {}",
-            plan.diagnostics.join("; ")
-        ))
-    } else if args.apply {
-        links::apply_link_plan(&plan)
-    } else {
-        Ok(())
-    };
-    if args.json {
-        let report = serde_json::json!({
-            "plan": &plan,
-            "applied": args.apply && result.is_ok(),
-            "error": result.as_ref().err(),
-        });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| format!("cannot serialize link report: {error}"))?
-        );
-    } else {
-        for entry in &plan.entries {
-            println!(
-                "{:?}: {} -> {} (source {})",
-                entry.action,
-                entry.destination,
-                entry.target.display(),
-                entry.source
-            );
-        }
-        for source in &plan.skipped_sources {
-            println!("Skipped missing source: {source}");
-        }
-        for diagnostic in &plan.diagnostics {
-            println!("Blocked: {diagnostic}");
-        }
-        if args.apply && result.is_ok() {
-            println!("Applied symbolic-link plan; no guidance files copied");
-        }
-    }
-    result
-}
-
-/// Fetch `args.repository_url`, resolve/synthesize a profile, plan, and
-/// install — cleaning up the managed checkout on every exit path unless
-/// `--keep-checkout` is given. `clone_fn` is injectable so tests never
-/// require a real network call or the `git` binary. Always returns the
-/// checkout path alongside the result: when `--keep-checkout` was not
-/// given, that path no longer exists on disk by the time this returns,
-/// which is itself the cleanup-happened assertion tests rely on.
-fn run_get(
-    args: &GuidanceGetArgs,
-    clone_fn: impl Fn(&str, &Path) -> Result<(), String>,
-) -> (Result<(), String>, PathBuf) {
-    run_get_with_reporter(args, clone_fn, &|message| {
-        eprintln!("guidance get: {message}")
-    })
-}
-
-fn run_get_with_reporter(
-    args: &GuidanceGetArgs,
-    clone_fn: impl Fn(&str, &Path) -> Result<(), String>,
-    reporter: &ProgressReporter<'_>,
-) -> (Result<(), String>, PathBuf) {
-    reporter("creating managed checkout");
-    let checkout = match tempfile::Builder::new()
-        .prefix("install-ctl-guidance-get-")
-        .tempdir()
-    {
-        Ok(dir) => dir,
-        Err(e) => {
-            return (
-                Err(format!(
-                    "failed to create a managed checkout directory: {e}"
-                )),
-                PathBuf::new(),
-            );
-        }
-    };
-    let checkout_path = checkout.path().to_path_buf();
-    // `git clone` accepts an existing empty directory as its destination.
-
-    let result = (|| -> Result<(), String> {
-        reporter(&format!("cloning {}", args.repository_url));
-        clone_fn(&args.repository_url, &checkout_path)
-            .map_err(|e| format!("failed to clone '{}': {e}", args.repository_url))?;
-
-        reporter("resolving guidance profile");
-        let profile = match &args.profile {
-            Some(relative) => load_profile(&checkout_path.join(relative))?,
-            None => synthesize_direct_profile(&args.select)?,
-        };
-
-        let destination_paths = DestinationPaths::platform_default();
-        let inputs = PlanInputs {
-            source_root: &checkout_path,
-            // Unread by `build_plan_with_profile`; `checkout_path` is a
-            // harmless placeholder to satisfy the shared struct literal.
-            profile_path: &checkout_path,
-            select: &args.select,
-            target_root: &args.target,
-            scope_override: args.destination_scope,
-            explicit_override: args.destination_path.as_deref(),
-            destination_paths: &destination_paths,
-        };
-        reporter("building installation plan");
-        let plan = build_plan_with_profile(profile, &inputs)?;
-        print_plan(&plan, args.json);
-        if plan.is_blocking() {
-            let blocking: Vec<_> = plan
-                .diagnostics
-                .iter()
-                .filter(|d| {
-                    matches!(
-                        d.code,
-                        graph::DiagnosticCode::MissingDependency
-                            | graph::DiagnosticCode::DuplicateDestination
-                            | graph::DiagnosticCode::AmbiguousOwnership
-                            | graph::DiagnosticCode::PathTraversal
-                            | graph::DiagnosticCode::AbsoluteSourcePath
-                            | graph::DiagnosticCode::SymlinkEscape
-                            | graph::DiagnosticCode::UnsupportedRecipeStep
-                            | graph::DiagnosticCode::UnsafeTarget
-                    )
-                })
-                .collect();
-            for b in &blocking {
-                eprintln!("BLOCKING: [{:?}] {}", b.code, b.message);
-            }
-            return Err(format!(
-                "plan has {} blocking diagnostic(s); see above",
-                blocking.len()
-            ));
-        }
-
-        reporter("installing guidance artifacts");
-        let report = install::install_plan(&plan, &checkout_path)?;
-        println!(
-            "installed {} artifact(s), {} unchanged",
-            report.written.len(),
-            report.unchanged.len()
-        );
-        Ok(())
-    })();
-
-    if args.keep_checkout {
-        // `checkout` (a `TempDir`) would delete this on drop; `keep`
-        // disarms that so the directory survives past this function.
-        let _ = checkout.keep();
-        reporter(&format!(
-            "keeping managed checkout at {}",
-            checkout_path.display()
-        ));
-    } else {
-        reporter("cleaning up managed checkout");
-    }
-    (result, checkout_path)
 }
 
 fn run_autofix(args: &GuidanceAutofixArgs) -> Result<(), String> {

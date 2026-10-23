@@ -1211,8 +1211,8 @@ fn get_reports_each_execution_phase() {
         messages.into_inner(),
         vec![
             "creating managed checkout",
-            "cloning https://example.invalid/repo.git",
-            "resolving guidance profile",
+            "acquiring selected source files",
+            "validated selected guidance profile",
             "building installation plan",
             "installing guidance artifacts",
             "cleaning up managed checkout",
@@ -1306,7 +1306,7 @@ fn get_clone_failure_attempts_no_plan_or_install() {
     let (result, checkout_path) = run_get(&args, failing_clone);
 
     let error = result.expect_err("clone failure must surface as an error");
-    assert!(error.contains("failed to clone"));
+    assert!(error.contains("failed to acquire selected guidance"));
     assert!(!explicit.exists());
     assert!(!checkout_path.exists());
 }
@@ -1649,8 +1649,8 @@ fn guidance_uninstall_removes_installed_plan() {
         explicit_override: Some(&explicit),
         destination_paths: &super::DestinationPaths::platform_default(),
     };
-    let profile = super::synthesize_direct_profile(&["prompt.md".to_string()]).unwrap();
-    let plan = super::build_plan_with_profile(profile, &plan_inputs).unwrap();
+    let profile = super::profile::synthesize_direct_profile(&["prompt.md".to_string()]).unwrap();
+    let plan = super::plan::build_plan_with_profile(profile, &plan_inputs).unwrap();
 
     let report = super::uninstall::uninstall_plan(&plan).unwrap();
     assert_eq!(report.removed.len(), 1);

@@ -145,16 +145,41 @@ install-ctl guidance unlink    --repo <repo> --harness vscode --source NAME=PATH
   the result reports `rolled_back: true`. An apply with unresolved findings
   but no safe operations fails with an actionable error instead of reporting
   a misleading successful `0 applied` run.
-- `get` is the one-command surface: it shallow-clones `<repository-url>`
-  with the system `git` binary into a managed temporary checkout, resolves
-  a profile (an explicit `--profile <repo-relative-path>`, resolved inside
-  the clone — not the caller's filesystem — or, when omitted, a synthesized
-  single-item direct-corpus profile from the bare `--select` path(s)), then
-  runs the same `plan`/`install` logic unchanged. `--target` defaults to
-  `.`. The managed checkout is deleted on every exit path — success,
-  blocking plan, or error — unless `--keep-checkout` is given, in which case
-  its path is printed. No Git-client crate is added; the clone shells out to
-  `git`, styled after `workflow-tools/session/crates/worktree-ctl/src/git.rs`.
+- `get` fetches only selected guidance and required references using typed
+  Git protocol v2 with `filter` support. HTTP(S), SSH, Git and local/file
+  sources remain supported when the server provides those capabilities.
+  Unsupported sources fail explicitly; no full-clone fallback exists.
+  System Git is still required for configuration, credentials, SSH and
+  received-pack verification.
+  - The remote HEAD is resolved to an immutable commit on every call.
+    Tree metadata is permitted, but unrelated file contents are not fetched.
+    Explicit missing paths fail after metadata discovery, without guidance
+    downloads or destination writes. A bad selector never searches a different
+    repository automatically.
+  - `--profile` names a repository-relative TOML file, not a local file.
+    Without a profile, `--select` values are direct paths. All selected IDs
+    and inputs are preflighted before guidance download. Directories expand
+    `.md`/`.toml` descendants; bare filenames retain deterministic lookup.
+    Copy recipes preserve their input/output identity.
+  - Submodules are entered only when needed by selection/reference traversal,
+    at recorded gitlink commits rather than child HEAD. Nested relative URLs
+    and contained Git symlinks are supported without OS symlink privileges;
+    escaping/cyclic symlinks and unavailable required children fail explicitly.
+    Bare-filename discovery may inspect candidate submodule metadata.
+  - Verified objects are reused under the OS cache directory,
+    `workflow-tools/install-ctl/guidance/v1`, segregated by credential-free
+    repository identity, object format and OID. Each invocation checks remote
+    access/freshness; a warm cache never hides authentication/network errors.
+    Corruption produces a diagnostic and refetch. Failed selections retain
+    valid cached metadata. No offline mode or cache-eviction interface is added.
+  - The existing local planner/installer then consumes the selected-source
+    snapshot; `--target` still defaults to `.` and destination overrides remain
+    supported. Local `plan`/`install` never access the network.
+  - Only invocation-owned temporary files are removed on success or error.
+    `--keep-checkout` retains and names that invocation's selected-source
+    snapshot, not a full Git checkout or the shared cache. With `--json`,
+    stdout contains the unchanged plan object; progress, install counts and
+    retained-snapshot paths go to stderr.
 
 ## Local Harness Links Without Copies
 

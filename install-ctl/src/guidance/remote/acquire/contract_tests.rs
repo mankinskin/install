@@ -5,6 +5,56 @@ use super::{
 use crate::guidance::remote::transport::tests::{Repository, git, http_server};
 use std::{collections::BTreeSet, fs, path::Path};
 
+#[cfg(windows)]
+#[test]
+fn windows_device_and_aliased_names_are_rejected_before_materialization() {
+    for path in [
+        "NUL.md",
+        "con.txt",
+        "COM1.md",
+        "LPT9.toml",
+        "folder./root.md",
+        "folder /root.md",
+        "root?.md",
+    ] {
+        assert!(super::normalize(path).is_err(), "{path}");
+    }
+    assert_eq!(
+        super::normalize("normal/root.md").unwrap(),
+        "normal/root.md"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn case_colliding_git_sources_do_not_overwrite_snapshot_bytes() {
+    let mut fixture = Repository::new(true);
+    write(&fixture.repo, "input-content", "# Other\n");
+    let oid = git(&fixture.repo, &["hash-object", "-w", "input-content"]);
+    fs::remove_file(fixture.repo.join("input-content")).unwrap();
+    git(
+        &fixture.repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{oid},Selected.md"),
+        ],
+    );
+    git(&fixture.repo, &["commit", "--quiet", "-m", "case alias"]);
+    fixture.head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    let snapshot = fixture.root.path().join("snapshot");
+    let error = acquire(
+        fixture.repo.to_str().unwrap(),
+        &["selected.md".into(), "Selected.md".into()],
+        None,
+        &snapshot,
+        &fixture.root.path().join("cache"),
+    )
+    .unwrap_err();
+    assert!(error.contains("aliases"), "{error}");
+}
+
 pub(super) fn verify_closure_inventory(
     fixture: &Repository,
     snapshot: &Path,

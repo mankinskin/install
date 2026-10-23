@@ -128,11 +128,11 @@ pub(super) fn worker_entry() {
 }
 
 #[cfg(windows)]
-struct ProcessOwner(windows_sys::Win32::Foundation::HANDLE);
+pub(super) struct ProcessOwner(windows_sys::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 impl ProcessOwner {
-    fn new(child: &Child) -> Result<Self, String> {
+    pub(super) fn new(child: &Child) -> Result<Self, String> {
         use std::{
             mem::{size_of, zeroed},
             os::windows::io::AsRawHandle,

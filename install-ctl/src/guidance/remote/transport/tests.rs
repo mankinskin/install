@@ -4,12 +4,15 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
 };
 use tempfile::TempDir;
 
 #[path = "contract_tests.rs"]
 mod contracts;
+#[path = "test_server.rs"]
+mod server;
+pub(crate) use server::Server;
 
 #[test]
 fn transport_worker() {
@@ -216,28 +219,6 @@ fn transport_probe() {
     }
 }
 
-pub(crate) struct Server(pub(crate) Child);
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        if self.0.try_wait().unwrap().is_none() {
-            #[cfg(windows)]
-            {
-                let status = Command::new("taskkill")
-                    .args(["/PID", &self.0.id().to_string(), "/T", "/F"])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .unwrap();
-                assert!(status.success(), "cannot stop owned fixture process tree");
-            }
-            #[cfg(not(windows))]
-            self.0.kill().expect("stop fixture server");
-        }
-        self.0.wait().expect("reap fixture server");
-    }
-}
-
 fn script() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
@@ -269,7 +250,7 @@ pub(crate) fn http_server_mode(repository: &Repository, mode: &str) -> (Server, 
         .unwrap();
     let port: u16 = line.trim().parse().expect("fixture ready port");
     (
-        Server(child),
+        Server::new(child),
         format!("http://127.0.0.1:{port}/repo.git"),
         log,
     )
@@ -306,7 +287,7 @@ fn git_protocol_transfers_only_metadata_and_selected_blob() {
         .stderr(Stdio::inherit())
         .spawn()
         .expect("start real Git protocol fixture");
-    let _server = Server(child);
+    let _server = Server::new(child);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {

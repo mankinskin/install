@@ -146,7 +146,7 @@ fn process_interruption_releases_lock_and_preserves_completed_objects() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let mut child = Server(child);
+    let mut child = Server::new(child);
     let deadline = Instant::now() + Duration::from_secs(20);
     while !ready.exists() && child.0.try_wait().unwrap().is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));

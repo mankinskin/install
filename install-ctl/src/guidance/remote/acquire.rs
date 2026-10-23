@@ -50,10 +50,34 @@ fn normalize(raw: &str) -> Result<String, String> {
                     "guidance acquisition: Git administrative paths cannot be selected".into(),
                 );
             }
-            value => components.push(value),
+            value => {
+                #[cfg(windows)]
+                validate_windows_component(value)?;
+                components.push(value);
+            }
         }
     }
     Ok(components.join("/"))
+}
+
+#[cfg(windows)]
+fn validate_windows_component(value: &str) -> Result<(), String> {
+    let stem = value.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let numbered_device = (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.len() == 4
+        && matches!(stem.as_bytes()[3], b'1'..=b'9');
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || numbered_device
+        || value.ends_with(['.', ' '])
+        || value
+            .chars()
+            .any(|character| character.is_control() || "<>\"|?*".contains(character))
+    {
+        return Err(format!(
+            "guidance acquisition: source component '{value}' cannot be materialized safely on Windows"
+        ));
+    }
+    Ok(())
 }
 
 impl Acquirer {
@@ -80,6 +104,13 @@ impl Acquirer {
             .cache
             .blob(&location.entry.oid)?;
         let destination = self.snapshot.join(&input);
+        if destination.try_exists().map_err(|error| {
+            format!("guidance acquisition: cannot inspect snapshot path '{input}': {error}")
+        })? {
+            return Err(format!(
+                "guidance acquisition: source '{input}' aliases an already materialized snapshot path"
+            ));
+        }
         fs::create_dir_all(
             destination
                 .parent()
@@ -126,7 +157,26 @@ pub fn acquire(
     cache_root: &Path,
 ) -> Result<Profile, String> {
     let cache = CachedRepository::open_in(source, cache_root)?;
+    let revision = cache.head_oid().to_owned();
+    let identity = cache
+        .directory()
+        .parent()
+        .and_then(Path::file_name)
+        .ok_or("guidance acquisition: missing repository identity")?
+        .to_string_lossy()
+        .into_owned();
     let root = repository::Repository::new(source, cache)?;
+    acquire_snapshot(root, selection, profile_path, snapshot, cache_root)
+        .map_err(|error| format!("repository {identity}, revision {revision}: {error}"))
+}
+
+fn acquire_snapshot(
+    root: repository::Repository,
+    selection: &[String],
+    profile_path: Option<&Path>,
+    snapshot: &Path,
+    cache_root: &Path,
+) -> Result<Profile, String> {
     let mut acquirer = Acquirer {
         repositories: BTreeMap::from([(String::new(), root)]),
         cache_root: cache_root.to_owned(),
