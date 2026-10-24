@@ -1,9 +1,8 @@
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Command, ExitStatus, Stdio},
     time::{Duration, Instant},
 };
 
@@ -104,7 +103,7 @@ pub struct Fixture {
     pub repo: PathBuf,
     pub url: String,
     pub log: PathBuf,
-    server: Child,
+    _server: install_ctl_test_support::HttpFixture,
     caches: Vec<(PathBuf, bool)>,
 }
 
@@ -114,37 +113,18 @@ impl Fixture {
         let repo = root.path().join("repo.git");
         init_repo(&repo, filter);
         let log = root.path().join("requests.jsonl");
-        let script =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/guidance/remote/transport/fixture.py");
-        let mut server = Command::new("python")
-            .arg(script)
-            .arg("http")
-            .arg(root.path())
-            .arg(&log)
-            .arg(if mutable_access {
-                "mutable-access"
-            } else {
-                "none"
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
-        let mut port = String::new();
-        BufReader::new(server.stdout.take().unwrap())
-            .read_line(&mut port)
-            .unwrap();
-        let port: u16 = port
-            .trim()
-            .parse()
-            .expect("fixture server must announce a port");
-        let url = format!("http://127.0.0.1:{port}/repo.git");
+        let server = install_ctl_test_support::HttpFixture::new(
+            root.path(),
+            log.clone(),
+            if mutable_access { "mutable-access" } else { "none" },
+        );
+        let url = server.url.clone();
         let mut fixture = Self {
             root,
             repo,
             url: url.clone(),
             log,
-            server,
+            _server: server,
             caches: Vec::new(),
         };
         fixture.cache(&url);
@@ -237,10 +217,6 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        if self.server.try_wait().unwrap().is_none() {
-            self.server.kill().unwrap();
-        }
-        self.server.wait().unwrap();
         for (directory, existed) in &self.caches {
             if !existed && directory.is_dir() {
                 fs::remove_dir_all(directory).unwrap();

@@ -36,6 +36,7 @@ libc = "0.2"
 
 [dev-dependencies]
 gix-transport = { version = "0.61", features = ["http-client-insecure-credentials"] }
+install-ctl-test-support = { path = "test-support" }
 portable-pty = "0.8"
 ratatui-testlib = { version = "0.1", features = ["ratatui-helpers"] }
 vt100 = "0.15"

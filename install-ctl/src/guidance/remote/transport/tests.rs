@@ -2,7 +2,6 @@ use super::SelectiveTransport;
 use std::{
     collections::BTreeSet,
     fs,
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -219,41 +218,21 @@ fn transport_probe() {
     }
 }
 
-fn script() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("guidance")
-        .join("remote")
-        .join("transport")
-        .join("fixture.py")
-}
-
-pub(crate) fn http_server(repository: &Repository, auth: bool) -> (Server, String, PathBuf) {
+pub(crate) fn http_server(
+    repository: &Repository,
+    auth: bool,
+) -> (install_ctl_test_support::HttpFixture, String, PathBuf) {
     http_server_mode(repository, if auth { "auth" } else { "anonymous" })
 }
 
-pub(crate) fn http_server_mode(repository: &Repository, mode: &str) -> (Server, String, PathBuf) {
+pub(crate) fn http_server_mode(
+    repository: &Repository,
+    mode: &str,
+) -> (install_ctl_test_support::HttpFixture, String, PathBuf) {
     let log = repository.root.path().join("requests.jsonl");
-    let mut child = Command::new("python")
-        .arg(script())
-        .arg("http")
-        .arg(repository.root.path())
-        .arg(&log)
-        .arg(mode)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("start loopback smart HTTP fixture");
-    let mut line = String::new();
-    BufReader::new(child.stdout.take().unwrap())
-        .read_line(&mut line)
-        .unwrap();
-    let port: u16 = line.trim().parse().expect("fixture ready port");
-    (
-        Server::new(child),
-        format!("http://127.0.0.1:{port}/repo.git"),
-        log,
-    )
+    let server = install_ctl_test_support::HttpFixture::new(repository.root.path(), log.clone(), mode);
+    let url = server.url.clone();
+    (server, url, log)
 }
 
 #[test]
@@ -336,15 +315,9 @@ fn smart_http_uses_credential_helper_without_logging_credentials() {
     let (_server, url, log) = http_server(&repository, true);
     let config = repository.root.path().join("client.config");
     let helper = format!(
-        "!python '{}' credential '{}'",
-        script().display().to_string().replace('\\', "/"),
-        repository
-            .root
-            .path()
-            .join("credentials.jsonl")
-            .display()
-            .to_string()
-            .replace('\\', "/")
+        "!{} credential {}",
+        install_ctl_test_support::command_path(&install_ctl_test_support::helper_path()),
+        install_ctl_test_support::command_path(&repository.root.path().join("credentials.jsonl"))
     );
     fs::write(&config, format!("[credential]\n\thelper = \"{helper}\"\n")).unwrap();
     repository.probe(&url, Some(&config), None, true);
@@ -363,9 +336,9 @@ fn ssh_command_wrapper_forwards_to_real_upload_pack() {
     let repository = Repository::new(true);
     let log = repository.root.path().join("ssh.jsonl");
     let ssh = format!(
-        "python '{}' ssh '{}'",
-        script().display().to_string().replace('\\', "/"),
-        log.display().to_string().replace('\\', "/")
+        "{} ssh {}",
+        install_ctl_test_support::command_path(&install_ctl_test_support::helper_path()),
+        install_ctl_test_support::command_path(&log)
     );
     let path = repository.repo.display().to_string().replace('\\', "/");
     repository.probe(

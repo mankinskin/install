@@ -93,7 +93,12 @@ impl BoundedPty {
     }
 
     pub fn send_key(&mut self, key: KeyCode) -> Result<(), String> {
-        let bytes = KeyEvent::new(key).to_bytes();
+        // Crossterm raw mode decodes LF as Ctrl+J, not Enter.
+        let bytes = if key == KeyCode::Enter {
+            vec![b'\r']
+        } else {
+            KeyEvent::new(key).to_bytes()
+        };
         self.writer
             .as_mut()
             .ok_or_else(|| "PTY writer is unavailable".to_string())?
