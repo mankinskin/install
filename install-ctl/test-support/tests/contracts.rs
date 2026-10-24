@@ -1,4 +1,4 @@
-use install_ctl_test_support::{helper_path, python_denial_path};
+use install_ctl_test_support::helper_path;
 use std::{fs, process::Command};
 use std::{
     io::{Read, Write},
@@ -9,25 +9,6 @@ use std::{
 };
 
 use install_ctl_test_support::HttpFixture;
-
-#[test]
-fn python_denial_environment_rejects_interpreters() {
-    let root = std::env::var_os("INSTALL_CTL_FIXTURE_EVIDENCE_ROOT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| tempfile::tempdir().unwrap().keep());
-    let trap = python_denial_path(&root);
-    let log = root.join("python-denial-positive.jsonl");
-    for name in ["python", "python3"] {
-        let status = Command::new(trap.join(name))
-            .arg("deny-python")
-            .env("INSTALL_CTL_DENY_PYTHON_LOG", &log)
-            .status()
-            .expect("run Python denial positive control");
-        assert_eq!(status.code(), Some(127));
-    }
-    assert_eq!(fs::read_to_string(log).unwrap().lines().count(), 2);
-    assert!(helper_path().is_file(), "Cargo supplied raw helper path");
-}
 
 fn repository(root: &Path) {
     assert!(

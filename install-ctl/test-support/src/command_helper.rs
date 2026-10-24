@@ -1,7 +1,6 @@
 use std::{
     env,
     io::{self, Read},
-    path::PathBuf,
     process::{Command, ExitCode},
 };
 
@@ -39,17 +38,7 @@ fn json_string(value: &str) -> String {
 
 fn main() -> ExitCode {
     let mut args = env::args_os();
-    let program = args.next().unwrap_or_default();
-    if std::path::Path::new(&program)
-        .file_name()
-        .is_some_and(|name| name == "python" || name == "python3")
-    {
-        if let Some(log) = env::var_os("INSTALL_CTL_DENY_PYTHON_LOG") {
-            append(&log.to_string_lossy(), r#"{"denied":"python"}"#);
-        }
-        eprintln!("Python-denied fixture invocation");
-        return ExitCode::from(127);
-    }
+    args.next();
     match args.next().as_deref() {
         Some(mode) if mode == "credential" => {
             let log = args.next().expect("credential log").to_string_lossy().into_owned();
@@ -96,15 +85,7 @@ fn main() -> ExitCode {
                     .unwrap_or(1) as u8,
             )
         }
-        Some(mode) if mode == "deny-python" => {
-            if let Some(log) = env::var_os("INSTALL_CTL_DENY_PYTHON_LOG") {
-                append(&log.to_string_lossy(), r#"{"denied":"python"}"#);
-            }
-            eprintln!("Python-denied fixture invocation");
-            ExitCode::from(127)
-        }
         _ => {
-            let _ = PathBuf::new();
             eprintln!("unknown install-ctl fixture helper mode");
             ExitCode::from(2)
         }

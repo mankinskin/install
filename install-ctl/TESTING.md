@@ -10,10 +10,14 @@ The remote-guidance tests use loopback HTTP with real `git http-backend` and
 filtering, cancellation, and SSH forwarding against disk-backed repositories.
 Git must therefore be available on `PATH`.
 
-For the dedicated hostile-environment validation, run the support-contract
-target first with `INSTALL_CTL_FIXTURE_EVIDENCE_ROOT`. It writes a trap-first
-`python-denial.path`; use that generated path only for the subsequent
-Python-denial suite run. This acceptance setup is not needed for ordinary
-test commands.
+Run the installer and fixture-support suites once:
 
-The fixture design is portable, but current runtime evidence is Linux-only.
+```sh
+cargo test -p install-ctl -p install-ctl-test-support
+```
+
+No interpreter traps, PATH overrides, preparatory fixture commands, or repeated
+serial/parallel/alternate-build runs are required.
+
+Current runtime validation is on Linux (WSL2 Ubuntu); Windows/macOS execution
+has not been verified.
