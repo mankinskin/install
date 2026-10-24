@@ -72,7 +72,7 @@ fn invalid_selection_then_corrected_and_unchanged_retries_reuse_verified_objects
             .is_some_and(|body| body.contains("command=fetch"))
     }));
 
-    let cache = fixture.cache(&fixture.url.clone()).join("SHA1");
+    let cache = fixture.cache(&fixture.url.clone()).join("sha1");
     let stored = fs::read(cache.join("objects").join(format!("{selected}.obj"))).unwrap();
     assert_eq!(stored, b"blob\n[dep](deps/base.md)\n");
     assert!(
