@@ -91,6 +91,28 @@ bin = "spec"
 features = ["cli"]
 
 [[artifact]]
+id = "mission-cli"
+category = "cli"
+kind = "rust-binary"
+source_path = "mission/crates/mission"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "mission"
+features = ["cli"]
+
+[[artifact]]
+id = "mission-mcp"
+category = "mcp"
+kind = "rust-binary"
+source_path = "mission/crates/mission"
+owner = "tooling"
+lifecycle = ["install", "inspect", "uninstall"]
+safety = "approval-required"
+bin = "mission-mcp"
+features = ["mcp"]
+
+[[artifact]]
 id = "audit-cli"
 category = "cli"
 kind = "rust-binary"
