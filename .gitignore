@@ -4,3 +4,6 @@
 **/.test/**/executions/
 **/.workflow-tools/test/**/executions/
 scan_fingerprints.json
+/bin/
+.crates.toml
+.crates2.json
