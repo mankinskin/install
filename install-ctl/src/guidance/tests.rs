@@ -20,7 +20,7 @@ fn write(dir: &Path, rel: &str, content: &str) {
 }
 
 #[test]
-fn cargo_install_options_are_opt_in_and_independent() {
+fn cargo_install_uses_the_built_lockfile_and_offline_remains_opt_in() {
     use clap::Parser;
 
     let cases: &[(&[&str], bool, bool)] = &[
@@ -55,7 +55,7 @@ fn cargo_install_options_are_opt_in_and_independent() {
             crate::CargoInstallOptions { offline, locked },
         );
         assert_eq!(args.iter().any(|arg| arg == "--offline"), offline);
-        assert_eq!(args.iter().any(|arg| arg == "--locked"), locked);
+        assert!(args.iter().any(|arg| arg == "--locked"));
     }
 }
 

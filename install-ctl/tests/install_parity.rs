@@ -200,6 +200,381 @@ fn run_scripted(fixture: &Fixture) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+fn artifact_command(fixture: &Fixture, args: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_install-ctl"));
+    command
+        .env("INSTALL_CTL_REPO_ROOT", &fixture.repo)
+        .args(args)
+        .arg("--root")
+        .arg(&fixture.scripted_root);
+    run_bounded(&mut command, "artifact status/update")
+}
+
+fn successful_stdout(output: Output) -> String {
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn artifact_status_defaults_to_all_and_does_not_install_missing_binaries() {
+    let fixture = fixture();
+    let stdout = successful_stdout(artifact_command(&fixture, &["status"]));
+    for id in ["tool-one", "tool-two", "install-ctl"] {
+        assert!(stdout.contains(&format!("{id}\tnot-installed")), "{stdout}");
+    }
+    assert!(!fixture.scripted_root.exists());
+    assert!(!fixture.repo.join("target/install-tools").exists());
+}
+
+#[test]
+fn artifact_status_detects_source_changes_and_update_leaves_missing_tools_alone() {
+    let fixture = fixture();
+    run_scripted(&fixture);
+    let installed = binary(&fixture.scripted_root, "tool-one");
+    let original = fs::read(&installed).unwrap();
+    let stdout = successful_stdout(artifact_command(&fixture, &["status", "tool-one"]));
+    assert!(stdout.contains("tool-one\tup-to-date"), "{stdout}");
+    assert!(!stdout.contains("tool-two\t"), "{stdout}");
+    fs::write(
+        fixture.repo.join("bins/tool-one/src/main.rs"),
+        "fn main() { println!(\"changed-sentinel\"); }\n",
+    )
+    .unwrap();
+    let stdout = successful_stdout(artifact_command(&fixture, &["status"]));
+    assert!(stdout.contains("tool-one\toutdated"), "{stdout}");
+    assert_eq!(fs::read(&installed).unwrap(), original);
+
+    let preview = successful_stdout(artifact_command(&fixture, &["--dry-run", "update"]));
+    assert!(preview.contains("tool-one"), "{preview}");
+    assert_eq!(fs::read(&installed).unwrap(), original);
+    successful_stdout(artifact_command(
+        &fixture,
+        &["update", "--offline", "--locked"],
+    ));
+    assert_ne!(fs::read(&installed).unwrap(), original);
+    assert!(!binary(&fixture.scripted_root, "tool-two").exists());
+    assert!(!binary(&fixture.scripted_root, "install-ctl").exists());
+    let modified = fs::metadata(&installed).unwrap().modified().unwrap();
+    let stdout = successful_stdout(artifact_command(&fixture, &["update"]));
+    assert!(stdout.contains("unchanged"), "{stdout}");
+    assert_eq!(
+        fs::metadata(&installed).unwrap().modified().unwrap(),
+        modified
+    );
+    let stdout = successful_stdout(artifact_command(&fixture, &["status"]));
+    assert!(stdout.contains("tool-one\tup-to-date"), "{stdout}");
+}
+
+#[test]
+fn artifact_update_empty_selection_is_a_noop_and_unknown_ids_fail() {
+    let fixture = fixture();
+    successful_stdout(artifact_command(&fixture, &["update"]));
+    assert!(!fixture.scripted_root.exists());
+    assert!(!fixture.repo.join("target/install-tools").exists());
+    for command in ["status", "update"] {
+        let output = artifact_command(&fixture, &[command, "no-such-artifact"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unknown artifact"));
+    }
+}
+
+#[test]
+fn artifact_status_accepts_categories_commas_and_deduplicates_ids() {
+    let fixture = fixture();
+    let stdout = successful_stdout(artifact_command(
+        &fixture,
+        &["status", "tool-two,tool-one", "cli", "all"],
+    ));
+    for id in ["tool-one", "tool-two", "install-ctl"] {
+        assert_eq!(stdout.matches(&format!("{id}\tnot-installed")).count(), 1);
+    }
+    let stdout = successful_stdout(artifact_command(&fixture, &["status", "tool-two"]));
+    assert!(stdout.contains("tool-two\tnot-installed"), "{stdout}");
+    assert!(!stdout.contains("tool-one\t"), "{stdout}");
+}
+
+#[test]
+fn artifact_status_reports_changed_sources_and_update_propagates_build_failure() {
+    let fixture = fixture();
+    run_scripted(&fixture);
+    let installed = binary(&fixture.scripted_root, "tool-one");
+    let original = fs::read(&installed).unwrap();
+    fs::write(
+        fixture.repo.join("bins/tool-one/src/main.rs"),
+        "compile_error!(\"fixture-build-failure\");",
+    )
+    .unwrap();
+    let stdout = successful_stdout(artifact_command(&fixture, &["status"]));
+    assert!(stdout.contains("tool-one\toutdated"), "{stdout}");
+    for command in ["update"] {
+        let output = artifact_command(&fixture, &[command]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("fixture-build-failure"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("tool-one\toutdated"));
+        assert_eq!(fs::read(&installed).unwrap(), original);
+        assert!(!binary(&fixture.scripted_root, "tool-two").exists());
+    }
+}
+
+#[test]
+fn artifact_update_respects_selection_and_status_dry_run_does_not_build() {
+    let fixture = fixture();
+    run_scripted(&fixture);
+    let installed = binary(&fixture.scripted_root, "tool-one");
+    let original = fs::read(&installed).unwrap();
+    fs::write(
+        fixture.repo.join("bins/tool-one/src/main.rs"),
+        "compile_error!(\"must-not-build\");",
+    )
+    .unwrap();
+    successful_stdout(artifact_command(&fixture, &["--dry-run", "status"]));
+    successful_stdout(artifact_command(&fixture, &["update", "tool-two"]));
+    assert_eq!(fs::read(&installed).unwrap(), original);
+    assert!(!binary(&fixture.scripted_root, "tool-two").exists());
+}
+
+#[test]
+fn self_update_keeps_the_existing_remote_installer_plan() {
+    let output = Command::new(env!("CARGO_BIN_EXE_install-ctl"))
+        .args(["--dry-run", "self-update"])
+        .output()
+        .unwrap();
+    let stdout = successful_stdout(output);
+    assert!(stdout.contains("git clone --depth 1 https://github.com/mankinskin/workflow-tools"));
+    assert!(stdout.contains("cargo install --path"));
+    assert!(stdout.contains("--bin install-ctl --force"));
+}
+
+#[test]
+fn artifact_status_never_builds_and_unchanged_sources_skip_update_builds() {
+    let fixture = fixture();
+    run_scripted(&fixture);
+    fs::remove_dir_all(fixture.repo.join("target/install-tools")).unwrap();
+    let stdout = successful_stdout(artifact_command(&fixture, &["status", "tool-one"]));
+    assert!(stdout.contains("tool-one\tup-to-date"), "{stdout}");
+    assert!(!fixture.repo.join("target/install-tools").exists());
+    successful_stdout(artifact_command(&fixture, &["update", "tool-one"]));
+    assert!(!fixture.repo.join("target/install-tools").exists());
+    fs::write(
+        fixture.repo.join("bins/tool-one/src/main.rs"),
+        "compile_error!(\"status-must-not-compile\");",
+    )
+    .unwrap();
+    let stdout = successful_stdout(artifact_command(&fixture, &["status", "tool-one"]));
+    assert!(stdout.contains("tool-one\toutdated"), "{stdout}");
+    assert!(!fixture.repo.join("target/install-tools").exists());
+}
+
+#[test]
+fn artifact_status_defaults_to_the_running_installers_root_not_cargo_home() {
+    let fixture = fixture();
+    fs::create_dir_all(fixture.scripted_root.join("bin")).unwrap();
+    let installed = binary(&fixture.scripted_root, "install-ctl");
+    fs::copy(env!("CARGO_BIN_EXE_install-ctl"), &installed).unwrap();
+    let output = Command::new(&installed)
+        .env("INSTALL_CTL_REPO_ROOT", &fixture.repo)
+        .env("CARGO_HOME", fixture.repo.join("different-cargo-home"))
+        .args(["status", "install-ctl"])
+        .output()
+        .unwrap();
+    let stdout = successful_stdout(output);
+    assert!(stdout.contains("install-ctl\toutdated"), "{stdout}");
+    assert!(!stdout.contains("not-installed"), "{stdout}");
+    let output = Command::new(&installed)
+        .env("INSTALL_CTL_REPO_ROOT", &fixture.repo)
+        .args(["status", "install-ctl", "--root"])
+        .arg(fixture.repo.join("empty-root"))
+        .output()
+        .unwrap();
+    assert!(successful_stdout(output).contains("install-ctl\tnot-installed"));
+}
+
+#[test]
+fn artifact_fingerprints_track_local_dependencies_but_not_unrelated_packages_or_build_outputs() {
+    let fixture = fixture();
+    let dependency = fixture.repo.parent().unwrap().join("shared");
+    fs::create_dir_all(dependency.join("src")).unwrap();
+    fs::write(
+        dependency.join("Cargo.toml"),
+        "[package]\nname = \"shared\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dependency.join("src/lib.rs"),
+        "pub fn value() -> u8 { 1 }\n",
+    )
+    .unwrap();
+    let manifest = fixture.repo.join("bins/tool-one/Cargo.toml");
+    let mut text = fs::read_to_string(&manifest).unwrap();
+    text.push_str("\n[dependencies]\nshared = { path = \"../../../shared\" }\n");
+    fs::write(&manifest, text).unwrap();
+    fs::write(
+        fixture.repo.join("bins/tool-one/src/main.rs"),
+        "fn main() { println!(\"{}\", shared::value()); }\n",
+    )
+    .unwrap();
+    generate_lockfile(&fixture);
+    run_scripted(&fixture);
+    fs::write(
+        fixture.repo.join("bins/tool-two/src/main.rs"),
+        "invalid but unrelated",
+    )
+    .unwrap();
+    fs::create_dir_all(dependency.join("target")).unwrap();
+    fs::write(dependency.join("target/generated"), "ignored output").unwrap();
+    let stdout = successful_stdout(artifact_command(&fixture, &["status", "tool-one"]));
+    assert!(stdout.contains("tool-one\tup-to-date"), "{stdout}");
+    fs::write(
+        dependency.join("src/lib.rs"),
+        "pub fn value() -> u8 { 2 }\n",
+    )
+    .unwrap();
+    let stdout = successful_stdout(artifact_command(&fixture, &["status", "tool-one"]));
+    assert!(stdout.contains("tool-one\toutdated"), "{stdout}");
+    successful_stdout(artifact_command(&fixture, &["update", "tool-one"]));
+    let stdout = successful_stdout(artifact_command(&fixture, &["status", "tool-one"]));
+    assert!(stdout.contains("tool-one\tup-to-date"), "{stdout}");
+}
+
+#[test]
+fn artifact_fingerprints_follow_registry_path_patches_without_fetching_dependencies() {
+    let fixture = fixture();
+    let dependency = fixture.repo.parent().unwrap().join("patched");
+    fs::create_dir_all(dependency.join("src")).unwrap();
+    fs::write(dependency.join("Cargo.toml"),
+        "[package]\nname = \"fingerprint-patch-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
+    fs::write(
+        dependency.join("src/lib.rs"),
+        "pub fn value() -> u8 { 1 }\n",
+    )
+    .unwrap();
+    let workspace_manifest = fixture.repo.join("Cargo.toml");
+    let mut text = fs::read_to_string(&workspace_manifest).unwrap();
+    text.push_str("\n[patch.crates-io]\nfingerprint-patch-fixture = { path = \"../patched\" }\n");
+    fs::write(&workspace_manifest, text).unwrap();
+    let manifest = fixture.repo.join("bins/tool-one/Cargo.toml");
+    let mut text = fs::read_to_string(&manifest).unwrap();
+    text.push_str("\n[dependencies]\nfingerprint-patch-fixture = \"=0.1.0\"\n");
+    fs::write(&manifest, text).unwrap();
+    fs::write(
+        fixture.repo.join("bins/tool-one/src/main.rs"),
+        "fn main() { println!(\"{}\", fingerprint_patch_fixture::value()); }\n",
+    )
+    .unwrap();
+    generate_lockfile(&fixture);
+    run_scripted(&fixture);
+    fs::write(
+        dependency.join("src/lib.rs"),
+        "pub fn value() -> u8 { 2 }\n",
+    )
+    .unwrap();
+    assert!(
+        successful_stdout(artifact_command(&fixture, &["status", "tool-one"]))
+            .contains("tool-one\toutdated")
+    );
+    successful_stdout(artifact_command(
+        &fixture,
+        &["update", "tool-one", "--offline"],
+    ));
+    assert!(
+        successful_stdout(artifact_command(&fixture, &["status", "tool-one"]))
+            .contains("tool-one\tup-to-date")
+    );
+}
+
+#[test]
+fn artifact_fingerprints_detect_binary_tampering_and_missing_or_invalid_receipts() {
+    let fixture = fixture();
+    run_scripted(&fixture);
+    let installed = binary(&fixture.scripted_root, "tool-one");
+    let original = fs::read(&installed).unwrap();
+    fs::write(&installed, b"tampered").unwrap();
+    let stdout = successful_stdout(artifact_command(&fixture, &["status", "tool-one"]));
+    assert!(stdout.contains("tool-one\toutdated"), "{stdout}");
+    successful_stdout(artifact_command(&fixture, &["update", "tool-one"]));
+    assert_eq!(fs::read(&installed).unwrap(), original);
+    let receipt = fs::read_dir(fixture.scripted_root.join(".install-ctl"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let valid_receipt = fs::read(&receipt).unwrap();
+    fs::write(&receipt, b"invalid json").unwrap();
+    let output = artifact_command(&fixture, &["status", "tool-one"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid receipt"));
+    let mut future: serde_json::Value = serde_json::from_slice(&valid_receipt).unwrap();
+    future["version"] = 99.into();
+    fs::write(&receipt, serde_json::to_vec(&future).unwrap()).unwrap();
+    let output = artifact_command(&fixture, &["status", "tool-one"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported receipt version"));
+    fs::remove_file(&receipt).unwrap();
+    let output = artifact_command(&fixture, &["status", "tool-one"]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no source fingerprint"));
+    assert!(successful_stdout(output).contains("tool-one\toutdated"));
+    fs::write(&receipt, valid_receipt).unwrap();
+    assert!(
+        successful_stdout(artifact_command(&fixture, &["status", "tool-one"]))
+            .contains("tool-one\tup-to-date")
+    );
+}
+
+#[test]
+fn artifact_fingerprints_include_lockfile_config_environment_and_file_additions_and_deletions() {
+    let fixture = fixture();
+    run_scripted(&fixture);
+    let lock = fixture.repo.join("Cargo.lock");
+    let original = fs::read(&lock).unwrap();
+    fs::write(
+        &lock,
+        format!("{}\n# changed\n", String::from_utf8_lossy(&original)),
+    )
+    .unwrap();
+    assert!(
+        successful_stdout(artifact_command(&fixture, &["status", "tool-one"]))
+            .contains("tool-one\toutdated")
+    );
+    fs::write(&lock, original).unwrap();
+    let asset = fixture.repo.join("bins/tool-one/asset.txt");
+    fs::write(&asset, "asset").unwrap();
+    assert!(
+        successful_stdout(artifact_command(&fixture, &["status", "tool-one"]))
+            .contains("tool-one\toutdated")
+    );
+    successful_stdout(artifact_command(&fixture, &["update", "tool-one"]));
+    fs::remove_file(asset).unwrap();
+    assert!(
+        successful_stdout(artifact_command(&fixture, &["status", "tool-one"]))
+            .contains("tool-one\toutdated")
+    );
+    successful_stdout(artifact_command(&fixture, &["update", "tool-one"]));
+    let output = Command::new(env!("CARGO_BIN_EXE_install-ctl"))
+        .env("INSTALL_CTL_REPO_ROOT", &fixture.repo)
+        .env("RUSTFLAGS", "--cfg fingerprint_change")
+        .args(["status", "tool-one", "--root"])
+        .arg(&fixture.scripted_root)
+        .output()
+        .unwrap();
+    assert!(successful_stdout(output).contains("tool-one\toutdated"));
+    fs::create_dir_all(fixture.repo.join(".cargo")).unwrap();
+    fs::write(
+        fixture.repo.join(".cargo/config.toml"),
+        "[build]\nrustflags = []\n",
+    )
+    .unwrap();
+    assert!(
+        successful_stdout(artifact_command(&fixture, &["status", "tool-one"]))
+            .contains("tool-one\toutdated")
+    );
+}
+
 fn run_tui(fixture: &Fixture) -> String {
     let mut command = portable_pty::CommandBuilder::new(env!("CARGO_BIN_EXE_install-ctl"));
     command.arg("tui");

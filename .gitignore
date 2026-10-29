@@ -7,3 +7,4 @@ scan_fingerprints.json
 /bin/
 .crates.toml
 .crates2.json
+/.install-ctl/

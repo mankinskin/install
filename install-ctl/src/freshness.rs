@@ -16,6 +16,25 @@ use std::{fs, path::Path};
 
 use sha2::{Digest, Sha256};
 
+pub fn installed_path(install_root: &Path, bin: &str) -> std::path::PathBuf {
+    install_root
+        .join("bin")
+        .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX))
+}
+
+pub fn is_installed(install_root: &Path, bin: &str) -> Result<bool, String> {
+    let path = installed_path(install_root, bin);
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => Err(format!(
+            "installed binary is not a file: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("failed to inspect {}: {error}", path.display())),
+    }
+}
+
 /// Directory `cargo install` copies binaries into: `$CARGO_HOME/bin`,
 /// defaulting to `~/.cargo/bin` when `CARGO_HOME` is unset.
 fn sha256_file(path: &Path) -> Option<[u8; 32]> {
@@ -35,5 +54,38 @@ pub fn is_up_to_date(target_dir: &Path, install_root: &Path, bin: &str) -> bool 
     match (sha256_file(&built), sha256_file(&installed)) {
         (Some(a), Some(b)) => a == b,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_comparison_distinguishes_missing_identical_and_different_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target");
+        let root = temp.path().join("root");
+        assert!(!is_installed(&root, "tool").unwrap());
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::create_dir_all(target.join("release")).unwrap();
+        let installed = installed_path(&root, "tool");
+        let built = target.join("release").join(installed.file_name().unwrap());
+        fs::write(&installed, b"old").unwrap();
+        assert!(!is_up_to_date(&target, &root, "tool"));
+        fs::write(&built, b"old").unwrap();
+        assert!(is_up_to_date(&target, &root, "tool"));
+        fs::write(&built, b"new").unwrap();
+        assert!(!is_up_to_date(&target, &root, "tool"));
+    }
+
+    #[test]
+    fn status_rejects_non_file_installation_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = installed_path(temp.path(), "tool");
+        fs::create_dir_all(&path).unwrap();
+        let error = is_installed(temp.path(), "tool").unwrap_err();
+        assert!(error.contains(&path.display().to_string()), "{error}");
+        assert!(error.contains("not a file"), "{error}");
     }
 }

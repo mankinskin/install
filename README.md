@@ -8,10 +8,13 @@ than repeating the same rules.
 
 ## Artifact registry and catalog
 
-Rust binary installation runs an online, unlocked workspace warm-up build by
-default, then installs the resulting binaries with Cargo's normal online,
-unlocked behavior. `--offline` and `--locked` are opt-in flags on the
-`install-ctl install` command and affect only the `cargo install` step:
+Rust binary installation first compares saved source and installed-binary
+fingerprints. Matching artifacts skip compilation and installation entirely.
+Otherwise it runs an online workspace warm-up build, then `cargo install
+--locked` against that build's dependency resolution. This prevents a second
+unlocked resolution from immediately making the installation appear stale.
+`--offline` restricts the install step only; `--locked` also prevents the
+warm-up build from changing Cargo.lock:
 
 ```bash
 install-ctl install install-ctl
@@ -19,6 +22,74 @@ install-ctl install install-ctl --offline
 install-ctl install install-ctl --locked
 install-ctl install install-ctl --offline --locked
 ```
+
+### Artifact status and updates
+
+```bash
+install-ctl status
+install-ctl status ticket spec-cli
+install-ctl status cli,mcp --root "$HOME/.local/workflow-tools"
+install-ctl update
+install-ctl update ticket spec-cli --root "$HOME/.local/workflow-tools" --offline --locked
+install-ctl --dry-run update
+install-ctl self-update
+```
+
+`status [selection...]` prints a tab-separated `artifact` / `status` table.
+Each selected installable binary is `not-installed`, `up-to-date`, or
+`outdated`. Selection accepts the same IDs, categories, comma-separated
+tokens, and `all` as `install`, deduplicates entries, and defaults to all
+installable artifacts. Inspect-only hooks and unsupported kinds are excluded
+from `all` with diagnostics; explicitly selecting one fails.
+
+Artifact commands resolve the installation root from `--root`, then the
+running executable's `<root>/bin` location, then `CARGO_HOME`, then `~/.cargo`.
+This includes `install`, `uninstall`, `self-uninstall`, `tui`, `status`, and
+`update`. A development executable under `target/debug` or `target/release`
+does not imply an installation root. `--root` always overrides detection;
+roots are not merged or searched via PATH.
+
+`status` **never compiles, installs, or accesses the network**. It compares
+source fingerprints and installed binary hashes with receipts saved after
+successful installation in `<root>/.install-ctl/`. Build-cache deletion does
+not invalidate a receipt. The source is the **local checkout** resolved by
+`INSTALL_CTL_REPO_ROOT` or the executable's ancestor directories, not the
+latest remote revision.
+
+Fingerprints cover package files and transitive local path/workspace/patch
+dependencies, manifests, workspace lockfiles, enabled artifact features,
+Cargo configuration, toolchain identity, and Rust/Cargo build environment
+variables. Dependency discovery uses offline, locked `cargo metadata
+--no-deps`; compiler identity uses `rustc -vV`, not a compilation. Optional,
+target-specific, and development dependencies are conservatively included.
+Build outputs (`target`, `node_modules`), Git internals, and workflow stores
+are excluded. Unrelated package source changes do not invalidate a receipt,
+but shared manifests/configuration/lockfiles do.
+
+`not-installed` means no binary exists at the selected root. `up-to-date`
+means both hashes match; otherwise the artifact is `outdated`. Existing or
+prebuilt installations without receipts conservatively report `outdated`
+with a provenance diagnostic: reinstall once to establish a fingerprint.
+Malformed receipts and filesystem/metadata/toolchain errors fail explicitly.
+This is a local-source cache, not universal build equivalence: arbitrary
+external files or environment inputs consumed by build scripts are not
+automatically discoverable, and remote updates require an explicit source
+or lockfile refresh.
+
+`update [selection...]` updates only installed artifacts with stale/missing
+fingerprints or changed binary hashes. Missing binaries stay missing;
+matching receipts skip all builds, even if the build cache has been deleted.
+After a required rebuild, identical binaries are not replaced or stopped,
+but their receipts are refreshed. Receipts are atomic per artifact and
+recorded only after verification; detected source drift during installation
+fails instead of recording a misleading receipt.
+An empty installed selection is a no-op. Apply reports actual per-artifact
+outcomes; a failure is nonzero and is not a batch rollback.
+`--dry-run status` performs the same read-only status check;
+`--dry-run update` previews conditional installation without builds or writes.
+
+The former `update` operation (fetch and reinstall only install-ctl from its
+canonical remote repository) is now named `self-update`.
 
 `install-ctl tui` accepts optional file-based guidance inputs without
 inventing a profile database: provide `--guidance-source`, one or more
@@ -83,9 +154,10 @@ pre-interaction shadow mechanism. No release upload or HTTPS fetch is included.
 Scripted installation and confirmed TUI installation print a `result:` report
 after applying the reviewed selection. Each action includes its identifier,
 target, detail, and one of `written`, `unchanged`, `skipped`, or `failed`.
-Binary freshness is determined by comparing installed bytes with the fresh
-release build, not by checking whether the target already exists: replacing a
-different binary reports `written`. Build or install failures are reported
+Matching source/binary receipts skip builds; otherwise binary replacement is
+determined by comparing installed bytes with the fresh release build, not
+merely by checking whether the target exists. Replacing a different binary
+reports `written`. Build or install failures are reported
 before exiting nonzero; later installation groups are skipped after a failure.
 Guidance-only installation does not invoke a binary build. Guidance outcomes
 include completed file writes even when a later file or profile fails; writes

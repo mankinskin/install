@@ -2,6 +2,7 @@ mod apply_report;
 mod cli;
 mod commands;
 mod config;
+mod fingerprint;
 mod freshness;
 mod guidance;
 pub mod installable;
@@ -14,6 +15,7 @@ mod registry;
 mod review_plan;
 mod selection;
 mod shell;
+mod status;
 mod tui;
 mod update;
 
@@ -57,7 +59,7 @@ enum Command {
         /// Run `cargo install` without network access; the warm-up build remains online.
         #[arg(long)]
         offline: bool,
-        /// Pass --locked to `cargo install` and require its lockfile to remain unchanged.
+        /// Also prevent the warm-up build from updating Cargo.lock.
         #[arg(long)]
         locked: bool,
         /// Target installation root directory.
@@ -92,8 +94,28 @@ enum Command {
         #[arg(long)]
         root: Option<std::path::PathBuf>,
     },
+    /// Compare installed binaries and saved source fingerprints without compiling.
+    Status {
+        /// Artifact ids, categories, or "all" (default: all installable artifacts).
+        selection: Vec<String>,
+        #[arg(long)]
+        root: Option<std::path::PathBuf>,
+    },
+    /// Update installed, outdated binaries from the local checkout; never install missing ones.
+    Update {
+        /// Artifact ids, categories, or "all" (default: all installable artifacts).
+        selection: Vec<String>,
+        #[arg(long)]
+        root: Option<std::path::PathBuf>,
+        /// Run `cargo install` offline; the comparison build remains online.
+        #[arg(long)]
+        offline: bool,
+        /// Require the comparison build's lockfile to remain unchanged.
+        #[arg(long)]
+        locked: bool,
+    },
     /// Fetch and install the latest install-ctl revision from its repository.
-    Update,
+    SelfUpdate,
     /// Render the registry projection to COMMANDS.md, or verify it is current.
     Catalog {
         #[arg(long)]
@@ -104,7 +126,7 @@ enum Command {
         /// Run `cargo install` without network access; the warm-up build remains online.
         #[arg(long)]
         offline: bool,
-        /// Pass --locked to `cargo install`.
+        /// Also prevent the warm-up build from updating Cargo.lock.
         #[arg(long)]
         locked: bool,
         /// Target installation root directory.
@@ -256,32 +278,49 @@ fn main() {
             if selected.is_empty() {
                 fail("selection matched no artifacts");
             }
-            let target_root = match root {
-                Some(r) => r,
-                None => match std::env::var_os("CARGO_HOME")
-                    .map(std::path::PathBuf::from)
-                    .or_else(|| dirs::home_dir().map(|h| h.join(".cargo")))
-                {
-                    Some(dir) => dir,
-                    None => fail("cannot locate target root directory"),
-                },
-            };
+            let target_root = resolve_install_root(root);
             run_uninstall(&selected, &target_root);
         }
         Some(Command::SelfUninstall { root }) => {
-            let target_root = match root {
-                Some(r) => r,
-                None => match std::env::var_os("CARGO_HOME")
-                    .map(std::path::PathBuf::from)
-                    .or_else(|| dirs::home_dir().map(|h| h.join(".cargo")))
-                {
-                    Some(dir) => dir,
-                    None => fail("cannot locate target root directory"),
-                },
-            };
+            let target_root = resolve_install_root(root);
             run_self_uninstall(&target_root);
         }
-        Some(Command::Update) => {
+        Some(Command::Status { selection, root }) => {
+            let plan = status::selection_plan(selection, root, InstallOptions::default())
+                .unwrap_or_else(|error| fail(&error));
+            status::run(&plan).unwrap_or_else(|error| fail(&error));
+        }
+        Some(Command::Update {
+            selection,
+            root,
+            offline,
+            locked,
+        }) => {
+            let mut plan = status::selection_plan(
+                selection,
+                root,
+                InstallOptions {
+                    force: true,
+                    offline,
+                    locked,
+                },
+            )
+            .unwrap_or_else(|error| fail(&error));
+            status::retain_installed(&mut plan).unwrap_or_else(|error| fail(&error));
+            if plan.selected.is_empty() {
+                println!("No installed artifacts selected; nothing to update.");
+            } else if cli.dry_run {
+                println!("Matching source/binary fingerprints skip all builds; otherwise:");
+                print_plan(&plan);
+            } else {
+                let report = run_install(&plan);
+                print_apply_report(&report);
+                if report.has_failures() {
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some(Command::SelfUpdate) => {
             relaunch_from_shadow_copy_if_replacing_self(true);
             if cli.dry_run {
                 update::print_plan();
@@ -812,9 +851,8 @@ fn install_args_with_root(
     if cargo_options.offline {
         args.push("--offline".to_string());
     }
-    if cargo_options.locked {
-        args.push("--locked".to_string());
-    }
+    // Install the resolution just built, not a second, independently updated graph.
+    args.push("--locked".to_string());
     for bin in bins {
         args.push("--bin".to_string());
         args.push((*bin).to_string());
@@ -904,6 +942,7 @@ fn relaunch_from_shadow_copy_if_replacing_self(replacing_self: bool) {
     match std::process::Command::new(&shadow_path)
         .args(std::env::args_os().skip(1))
         .env(SHADOW_ENV_VAR, &shadow_path)
+        .env("INSTALL_CTL_ORIGINAL_EXE", &current_exe)
         .spawn()
     {
         Ok(_) => std::process::exit(0),
@@ -962,7 +1001,8 @@ fn windows_display_path(path: std::path::PathBuf) -> String {
 }
 
 fn resolve_install_root(root: Option<std::path::PathBuf>) -> std::path::PathBuf {
-    root.or_else(|| std::env::var_os("CARGO_HOME").map(std::path::PathBuf::from))
+    root.or_else(|| status::executable_root().unwrap_or_else(|error| fail(&error)))
+        .or_else(|| std::env::var_os("CARGO_HOME").map(std::path::PathBuf::from))
         .or_else(|| dirs::home_dir().map(|home| home.join(".cargo")))
         .unwrap_or_else(|| fail("cannot locate target root directory"))
 }
@@ -1092,6 +1132,42 @@ fn install_rust_binaries(
     target_root: &Path,
 ) -> ApplyReport {
     let mut report = ApplyReport::default();
+    let initial = match fingerprint::Snapshot::capture(repo_root, artifacts) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            for artifact in artifacts {
+                report.push(binary_action(
+                    artifact,
+                    target_root,
+                    ActionStatus::Failed,
+                    &error,
+                ));
+            }
+            return report;
+        }
+    };
+    let mut pending = Vec::new();
+    for artifact in artifacts {
+        match fingerprint::is_current(target_root, artifact, initial.source(artifact)) {
+            Ok(true) => report.push(binary_action(
+                artifact,
+                target_root,
+                ActionStatus::Unchanged,
+                "source fingerprint and installed binary match; no build needed",
+            )),
+            Ok(false) => pending.push(*artifact),
+            Err(error) => report.push(binary_action(
+                artifact,
+                target_root,
+                ActionStatus::Failed,
+                &error,
+            )),
+        }
+    }
+    if report.has_failures() || pending.is_empty() {
+        return report;
+    }
+    let artifacts = pending.as_slice();
     let plan = match RustBuildPlan::new(artifacts, repo_root) {
         Ok(p) => p,
         Err(error) => {
@@ -1114,10 +1190,7 @@ fn install_rust_binaries(
     // killed. It also produces the exact output `cargo install` would copy,
     // which the freshness check below compares against what's installed
     // before deciding whether killing/reinstalling is needed at all.
-    let build_args = plan.build_args();
-    let arg_refs: Vec<&str> = build_args.iter().map(String::as_str).collect();
-    let label = plan.bins.join(", ");
-    if let Err(error) = shell::run_cmd_args("cargo", &arg_refs, repo_root, &label) {
+    if let Err(error) = build_rust_binaries(&plan, repo_root, target_dir, cargo_options.locked) {
         for artifact in artifacts {
             report.push(binary_action(
                 artifact,
@@ -1126,7 +1199,49 @@ fn install_rust_binaries(
                 &error,
             ));
         }
+
         return report;
+    }
+    let snapshot = match fingerprint::Snapshot::capture(repo_root, artifacts) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            for artifact in artifacts {
+                report.push(binary_action(
+                    artifact,
+                    target_root,
+                    ActionStatus::Failed,
+                    &error,
+                ));
+            }
+            return report;
+        }
+    };
+    if artifacts
+        .iter()
+        .any(|artifact| initial.source(artifact) != snapshot.source(artifact))
+    {
+        // An unlocked warm-up may legitimately refresh Cargo.lock. Rebuild once
+        // against the final snapshot before claiming those inputs were installed.
+        if let Err(error) = build_rust_binaries(&plan, repo_root, target_dir, true)
+            .and_then(|()| fingerprint::Snapshot::capture(repo_root, artifacts))
+            .and_then(|after| {
+                if after.sources == snapshot.sources {
+                    Ok(())
+                } else {
+                    Err("source inputs changed during build; retry installation".into())
+                }
+            })
+        {
+            for artifact in artifacts {
+                report.push(binary_action(
+                    artifact,
+                    target_root,
+                    ActionStatus::Failed,
+                    &error,
+                ));
+            }
+            return report;
+        }
     }
 
     // cargo install only accepts one --path per call, so distinct crates
@@ -1157,11 +1272,18 @@ fn install_rust_binaries(
         for artifact in &group {
             let bin = artifact.bin.as_deref().unwrap_or(&artifact.id);
             if !stale_bins.contains(&bin) {
+                let result = fingerprint::record(target_root, artifact, snapshot.source(artifact));
                 report.push(binary_action(
                     artifact,
                     target_root,
-                    ActionStatus::Unchanged,
-                    "byte-identical to the freshly built binary",
+                    if result.is_ok() {
+                        ActionStatus::Unchanged
+                    } else {
+                        ActionStatus::Failed
+                    },
+                    &result
+                        .err()
+                        .unwrap_or_else(|| "byte-identical; source fingerprint recorded".into()),
                 ));
             }
         }
@@ -1198,7 +1320,15 @@ fn install_rust_binaries(
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let label = ids.join(", ");
         println!("==> {label}");
-        let result = shell::run_cmd_args("cargo", &arg_refs, repo_root, &label);
+        let result = shell::run_cmd_args("cargo", &arg_refs, repo_root, &label).and_then(|()| {
+            let after = fingerprint::Snapshot::capture(repo_root, artifacts)?;
+            if after.sources != snapshot.sources {
+                return Err(
+                    "source inputs changed during installation; fingerprints not recorded".into(),
+                );
+            }
+            Ok(())
+        });
         for artifact in &group {
             let bin = artifact.bin.as_deref().unwrap_or(&artifact.id);
             if !stale_bins.contains(&bin) {
@@ -1206,12 +1336,19 @@ fn install_rust_binaries(
             }
             let action = match &result {
                 Err(error) => binary_action(artifact, target_root, ActionStatus::Failed, error),
-                Ok(()) if freshness::is_up_to_date(target_dir, target_root, bin) => binary_action(
-                    artifact,
-                    target_root,
-                    ActionStatus::Written,
-                    "installed binary matches the freshly built binary",
-                ),
+                Ok(()) if freshness::is_up_to_date(target_dir, target_root, bin) => {
+                    match fingerprint::record(target_root, artifact, snapshot.source(artifact)) {
+                        Ok(()) => binary_action(
+                            artifact,
+                            target_root,
+                            ActionStatus::Written,
+                            "installed binary verified; source fingerprint recorded",
+                        ),
+                        Err(error) => {
+                            binary_action(artifact, target_root, ActionStatus::Failed, &error)
+                        }
+                    }
+                }
                 Ok(()) => binary_action(
                     artifact,
                     target_root,
@@ -1223,6 +1360,22 @@ fn install_rust_binaries(
         }
     }
     report
+}
+
+fn build_rust_binaries(
+    plan: &RustBuildPlan,
+    repo_root: &Path,
+    target_dir: &Path,
+    locked: bool,
+) -> Result<(), String> {
+    let mut args = plan.build_args();
+    args.push("--target-dir".into());
+    args.push(target_dir.to_string_lossy().into_owned());
+    if locked {
+        args.push("--locked".into());
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    shell::run_cmd_args("cargo", &arg_refs, repo_root, &plan.bins.join(", "))
 }
 
 fn install_vscode_extension(artifact: &Artifact, repo_root: &Path) -> Result<(), String> {
