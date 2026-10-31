@@ -341,6 +341,12 @@ mod tests {
     }
 
     #[test]
+    fn extract_links_ignores_code_blocks_and_spans() {
+        let text = "Real [a](a.md).\n\n```markdown\n| **Part** | [x](01-example.md) |\n```\n\nInline `[y](y.md)` and [b](b.md).\n";
+        assert_eq!(extract_links(text), vec!["a.md", "b.md"]);
+    }
+
+    #[test]
     fn classify_link_detects_external_and_unsafe() {
         assert!(matches!(
             classify_link("https://example.com"),

@@ -1,29 +1,20 @@
-/// Extract inline Markdown targets in source order, stripping link titles.
+use pulldown_cmark::{Event, Parser, Tag};
+
+/// Extract Markdown link and image targets in source order, stripping titles.
+///
+/// Uses CommonMark parsing so that example links inside code spans and fenced
+/// code blocks are not treated as dependencies.
 pub fn extract_links(text: &str) -> Vec<String> {
-    let mut links = Vec::new();
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'['
-            && let Some(close_bracket_rel) = text[i..].find(']')
-        {
-            let after_label = i + close_bracket_rel + 1;
-            if text[after_label..].starts_with('(') {
-                let paren_start = after_label + 1;
-                if let Some(close_paren_rel) = text[paren_start..].find(')') {
-                    let raw_target = &text[paren_start..paren_start + close_paren_rel];
-                    let target = raw_target.split_whitespace().next().unwrap_or("");
-                    if !target.is_empty() {
-                        links.push(target.to_string());
-                    }
-                    i = paren_start + close_paren_rel + 1;
-                    continue;
-                }
+    Parser::new(text)
+        .filter_map(|event| match event {
+            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. })
+                if !dest_url.is_empty() =>
+            {
+                Some(dest_url.into_string())
             }
-        }
-        i += 1;
-    }
-    links
+            _ => None,
+        })
+        .collect()
 }
 
 pub enum LinkClass {
