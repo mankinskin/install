@@ -20,6 +20,7 @@ mod install;
 mod installer_script;
 mod link_closure;
 mod scopes;
+mod span_rewrites;
 mod uninstall;
 
 fn write(dir: &Path, rel: &str, content: &str) {

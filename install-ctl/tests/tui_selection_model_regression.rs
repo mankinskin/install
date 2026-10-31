@@ -26,6 +26,8 @@ pub mod guidance_plan;
 pub mod guidance_profile;
 #[path = "../src/guidance/rewrite.rs"]
 pub mod guidance_rewrite;
+#[path = "../src/guidance/span_edit.rs"]
+pub mod guidance_span_edit;
 
 mod guidance {
     pub use crate::guidance_destination as destination;
@@ -34,6 +36,7 @@ mod guidance {
     pub use crate::guidance_plan as plan;
     pub use crate::guidance_profile as profile;
     pub use crate::guidance_rewrite as rewrite;
+    pub use crate::guidance_span_edit as span_edit;
 }
 #[path = "../src/review_plan.rs"]
 mod review_plan;

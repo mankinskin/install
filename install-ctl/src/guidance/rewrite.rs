@@ -28,14 +28,19 @@ pub fn rewrite_link(old_link: &str, from_final: &str, target_final: &str) -> Opt
     if new_parts.is_empty() {
         return None;
     }
-    let new_link = new_parts.join("/");
+    let new_path = new_parts.join("/");
 
     let old_path_part = old_link.split('#').next().unwrap_or(old_link);
     let fragment = &old_link[old_path_part.len()..];
-    if old_path_part == new_link {
+    // Compare decoded paths so an encoded but otherwise identical link is
+    // left alone; emit the new path percent-encoded with the fragment as-is.
+    if markdown_links::decode_percent(old_path_part) == new_path {
         None
     } else {
-        Some(format!("{new_link}{fragment}"))
+        Some(format!(
+            "{}{fragment}",
+            markdown_links::encode_destination(&new_path)
+        ))
     }
 }
 
@@ -63,6 +68,23 @@ mod tests {
         // (same relative shape once both share `.agents/` root)
         let rewritten = rewrite_link("../base.md", "a/b/prompt.md", "other/base.md");
         assert_eq!(rewritten, Some("../../other/base.md".to_string()));
+    }
+
+    #[test]
+    fn encodes_new_path_and_keeps_fragment() {
+        let rewritten = rewrite_link("../base.md#sec", "a/b/prompt.md", "other/my base.md");
+        assert_eq!(
+            rewritten,
+            Some("../../other/my%20base.md#sec".to_string())
+        );
+    }
+
+    #[test]
+    fn encoded_identical_link_needs_no_rewrite() {
+        assert_eq!(
+            rewrite_link("x%20y.md#f", "a/p.md", "a/x y.md"),
+            None
+        );
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub mod plan;
 pub mod profile;
 pub mod remote;
 pub mod rewrite;
+pub mod span_edit;
 pub mod uninstall;
 
 #[cfg(test)]

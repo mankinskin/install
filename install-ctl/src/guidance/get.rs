@@ -75,23 +75,7 @@ fn with_acquirer(
         let plan = build_plan_with_profile(profile, &inputs)?;
         print_plan(&plan, args.json);
         if plan.is_blocking() {
-            let blocking: Vec<_> = plan
-                .diagnostics
-                .iter()
-                .filter(|diagnostic| {
-                    matches!(
-                        diagnostic.code,
-                        graph::DiagnosticCode::MissingDependency
-                            | graph::DiagnosticCode::DuplicateDestination
-                            | graph::DiagnosticCode::AmbiguousOwnership
-                            | graph::DiagnosticCode::PathTraversal
-                            | graph::DiagnosticCode::AbsoluteSourcePath
-                            | graph::DiagnosticCode::SymlinkEscape
-                            | graph::DiagnosticCode::UnsupportedRecipeStep
-                            | graph::DiagnosticCode::UnsafeTarget
-                    )
-                })
-                .collect();
+            let blocking: Vec<_> = plan.blocking_diagnostics().collect();
             for diagnostic in &blocking {
                 eprintln!("BLOCKING: [{:?}] {}", diagnostic.code, diagnostic.message);
             }

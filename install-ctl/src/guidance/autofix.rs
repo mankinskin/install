@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+use crate::guidance::span_edit;
+
 pub const TRANSFORMATION_REWRITE_LINK_DESTINATION: &str = "rewrite_link_destination";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,9 +226,14 @@ pub fn apply_plan(
             continue;
         };
 
-        let old_link = format!("]({})", operation.raw_destination);
-        let new_link = format!("]({})", operation.new_destination);
-        if !content.contains(&old_link) {
+        let (rewritten, unlocated) = span_edit::replace_destinations(
+            &content,
+            &[(
+                operation.raw_destination.clone(),
+                operation.new_destination.clone(),
+            )],
+        );
+        if !unlocated.is_empty() {
             refused.push(RefusedOperation {
                 source_path: operation.source_path.clone(),
                 raw_destination: operation.raw_destination.clone(),
@@ -238,7 +245,6 @@ pub fn apply_plan(
             continue;
         }
 
-        let rewritten = content.replace(&old_link, &new_link);
         let temp_path = absolute_source.with_extension("autofix.tmp");
         if let Err(error) = fs::write(&temp_path, &rewritten) {
             refused.push(RefusedOperation {
@@ -328,174 +334,4 @@ pub fn apply_result_to_json(result: &AutofixApplyResult) -> serde_json::Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use tempfile::tempdir;
-
-    use super::{apply_plan, build_plan};
-
-    fn rewrites(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(old, new)| (old.to_string(), new.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn plan_is_read_only_and_reports_matching_operation() {
-        let repo = tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join(".agents")).unwrap();
-        std::fs::write(repo.path().join(".agents/README.md"), "# guidance\n").unwrap();
-        std::fs::write(
-            repo.path().join(".agents/links.md"),
-            "[moved](old-name.md)\n",
-        )
-        .unwrap();
-
-        let before = std::fs::read(repo.path().join(".agents/links.md")).unwrap();
-        let plan = build_plan(
-            repo.path(),
-            None,
-            &rewrites(&[("old-name.md", "README.md")]),
-        )
-        .expect("plan");
-        let after = std::fs::read(repo.path().join(".agents/links.md")).unwrap();
-
-        assert_eq!(before, after, "plan must not write to disk");
-        assert_eq!(plan.operations.len(), 1);
-        assert_eq!(plan.operations[0].new_destination, "README.md");
-        assert!(plan.unresolved.is_empty());
-    }
-
-    #[test]
-    fn plan_leaves_findings_without_a_rewrite_unresolved() {
-        let repo = tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join(".agents")).unwrap();
-        std::fs::write(repo.path().join(".agents/links.md"), "[gone](missing.md)\n").unwrap();
-
-        let plan = build_plan(repo.path(), None, &BTreeMap::new()).expect("plan");
-
-        assert!(plan.operations.is_empty());
-        assert_eq!(plan.unresolved.len(), 1);
-        assert!(
-            plan.unresolved[0]
-                .reason
-                .contains("no registered safe transformation")
-        );
-    }
-
-    #[test]
-    fn apply_requires_explicit_confirmation() {
-        let repo = tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join(".agents")).unwrap();
-        std::fs::write(repo.path().join(".agents/README.md"), "# guidance\n").unwrap();
-        std::fs::write(
-            repo.path().join(".agents/links.md"),
-            "[moved](old-name.md)\n",
-        )
-        .unwrap();
-
-        let plan = build_plan(
-            repo.path(),
-            None,
-            &rewrites(&[("old-name.md", "README.md")]),
-        )
-        .expect("plan");
-
-        let error = apply_plan(repo.path(), &plan, false).expect_err("must refuse without --yes");
-        assert!(error.contains("--yes"));
-    }
-
-    #[test]
-    fn apply_writes_atomically_and_reruns_audit() {
-        let repo = tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join(".agents")).unwrap();
-        std::fs::write(repo.path().join(".agents/README.md"), "# guidance\n").unwrap();
-        std::fs::write(
-            repo.path().join(".agents/links.md"),
-            "[moved](old-name.md)\n",
-        )
-        .unwrap();
-
-        let plan = build_plan(
-            repo.path(),
-            None,
-            &rewrites(&[("old-name.md", "README.md")]),
-        )
-        .expect("plan");
-        let result = apply_plan(repo.path(), &plan, true).expect("apply");
-
-        assert_eq!(result.applied.len(), 1);
-        assert!(!result.rolled_back);
-        assert_eq!(result.post_audit_blocking_findings, 0);
-        let rewritten = std::fs::read_to_string(repo.path().join(".agents/links.md")).unwrap();
-        assert!(rewritten.contains("[moved](README.md)"));
-    }
-
-    #[test]
-    fn apply_refuses_stale_hash_with_zero_writes() {
-        let repo = tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join(".agents")).unwrap();
-        std::fs::write(repo.path().join(".agents/README.md"), "# guidance\n").unwrap();
-        std::fs::write(
-            repo.path().join(".agents/links.md"),
-            "[moved](old-name.md)\n",
-        )
-        .unwrap();
-
-        let plan = build_plan(
-            repo.path(),
-            None,
-            &rewrites(&[("old-name.md", "README.md")]),
-        )
-        .expect("plan");
-
-        // Source changes after the plan was generated.
-        std::fs::write(
-            repo.path().join(".agents/links.md"),
-            "[moved](old-name.md)\nextra content\n",
-        )
-        .unwrap();
-        let before_apply = std::fs::read(repo.path().join(".agents/links.md")).unwrap();
-
-        let result = apply_plan(repo.path(), &plan, true).expect("apply call succeeds");
-
-        assert!(result.applied.is_empty());
-        assert_eq!(result.refused.len(), 1);
-        assert!(result.refused[0].reason.contains("stale plan"));
-        let after_apply = std::fs::read(repo.path().join(".agents/links.md")).unwrap();
-        assert_eq!(
-            before_apply, after_apply,
-            "stale-hash refusal must not write"
-        );
-    }
-
-    #[test]
-    fn apply_rolls_back_when_post_audit_still_blocks() {
-        let repo = tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join(".agents")).unwrap();
-        // Deliberately rewrite to another missing target so the post-audit
-        // still blocks and the apply must roll back to the original file.
-        std::fs::write(
-            repo.path().join(".agents/links.md"),
-            "[moved](old-name.md)\n",
-        )
-        .unwrap();
-
-        let plan = build_plan(
-            repo.path(),
-            None,
-            &rewrites(&[("old-name.md", "still-missing.md")]),
-        )
-        .expect("plan");
-        let original = std::fs::read(repo.path().join(".agents/links.md")).unwrap();
-
-        let result = apply_plan(repo.path(), &plan, true).expect("apply");
-
-        assert!(result.rolled_back);
-        assert_eq!(result.post_audit_blocking_findings, 1);
-        let after = std::fs::read(repo.path().join(".agents/links.md")).unwrap();
-        assert_eq!(original, after, "rollback must restore original content");
-    }
-}
+mod tests;

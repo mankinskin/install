@@ -4,7 +4,7 @@
 
 use std::{fs, path::PathBuf};
 
-use crate::guidance::plan::GuidancePlan;
+use crate::guidance::{plan::GuidancePlan, span_edit};
 
 #[derive(Default)]
 pub struct InstallReport {
@@ -34,7 +34,7 @@ pub fn install_plan_with_report(
     if plan.is_blocking() {
         return Err(format!(
             "refusing to install: plan has {} blocking diagnostic(s)",
-            plan.diagnostics.len()
+            plan.blocking_diagnostics().count()
         ));
     }
 
@@ -53,12 +53,13 @@ pub fn install_plan_with_report(
         if !artifact.rewrites.is_empty() {
             let mut text = String::from_utf8(bytes)
                 .map_err(|e| format!("'{}' is not valid UTF-8: {e}", artifact.id))?;
-            for rewrite in &artifact.rewrites {
-                text = text.replace(
-                    &format!("]({}", rewrite.old_link),
-                    &format!("]({}", rewrite.new_link),
-                );
-            }
+            let edits: Vec<(String, String)> = artifact
+                .rewrites
+                .iter()
+                .map(|rewrite| (rewrite.old_link.clone(), rewrite.new_link.clone()))
+                .collect();
+            // Unlocated destinations are left unchanged; the plan already warned.
+            (text, _) = span_edit::replace_destinations(&text, &edits);
             bytes = text.into_bytes();
         }
 

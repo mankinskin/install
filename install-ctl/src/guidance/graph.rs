@@ -46,6 +46,19 @@ pub enum DiagnosticCode {
     SymlinkEscape,
     UnsupportedRecipeStep,
     UnsafeTarget,
+    UnlocatableRewrite,
+}
+
+impl DiagnosticCode {
+    /// Whether a plan carrying this code must refuse to install.
+    pub fn is_blocking(&self) -> bool {
+        !matches!(
+            self,
+            DiagnosticCode::UnlocatableRewrite
+                | DiagnosticCode::Cycle
+                | DiagnosticCode::MissingDependency
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]

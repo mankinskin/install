@@ -60,18 +60,12 @@ pub struct GuidancePlan {
 
 impl GuidancePlan {
     pub fn is_blocking(&self) -> bool {
-        self.diagnostics.iter().any(|d| {
-            matches!(
-                d.code,
-                DiagnosticCode::DuplicateDestination
-                    | DiagnosticCode::AmbiguousOwnership
-                    | DiagnosticCode::PathTraversal
-                    | DiagnosticCode::AbsoluteSourcePath
-                    | DiagnosticCode::SymlinkEscape
-                    | DiagnosticCode::UnsupportedRecipeStep
-                    | DiagnosticCode::UnsafeTarget
-            )
-        })
+        self.blocking_diagnostics().next().is_some()
+    }
+
+    /// Diagnostics whose code refuses installation.
+    pub fn blocking_diagnostics(&self) -> impl Iterator<Item = &Diagnostic> {
+        self.diagnostics.iter().filter(|d| d.code.is_blocking())
     }
 }
 
@@ -306,7 +300,10 @@ pub fn build_plan_with_profile(
         if id.ends_with(".md") {
             let read_id = recipe_from.get(id).cloned().unwrap_or_else(|| id.clone());
             if let Ok(text) = fs::read_to_string(inputs.source_root.join(&read_id)) {
-                rewrites = compute_rewrites(id, &text, &final_path, &final_paths);
+                let (found, found_diagnostics) =
+                    compute_rewrites(id, &text, &final_path, &final_paths);
+                rewrites = found;
+                diagnostics.extend(found_diagnostics);
             }
         }
 
@@ -376,9 +373,21 @@ pub fn render_text(plan: &GuidancePlan) -> String {
             out.push_str(&format!("  {s}\n"));
         }
     }
-    if !plan.diagnostics.is_empty() {
+    let blocking: Vec<_> = plan.blocking_diagnostics().collect();
+    if !blocking.is_empty() {
         out.push_str("diagnostics (blocking):\n");
-        for d in &plan.diagnostics {
+        for d in blocking {
+            out.push_str(&format!("  [{:?}] {}\n", d.code, d.message));
+        }
+    }
+    let warnings: Vec<_> = plan
+        .diagnostics
+        .iter()
+        .filter(|d| !d.code.is_blocking())
+        .collect();
+    if !warnings.is_empty() {
+        out.push_str("warnings:\n");
+        for d in warnings {
             out.push_str(&format!("  [{:?}] {}\n", d.code, d.message));
         }
     }
