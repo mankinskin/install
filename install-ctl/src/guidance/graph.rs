@@ -5,9 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-#[path = "graph/links.rs"]
-mod links;
-pub use links::{LinkClass, classify_link, extract_links, resolve_relative};
+use markdown_links::{DestinationShape, classify_destination, resolve_local};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -148,19 +146,26 @@ pub fn compute_closure_fallible<S: FallibleContentSource + ?Sized>(
             None
         };
 
-        let mut links: Vec<String> = text.as_deref().map(extract_links).unwrap_or_default();
-        links.sort();
-        links.dedup();
+        let mut destinations: Vec<String> = text
+            .as_deref()
+            .map(markdown_links::extract)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|link| link.destination)
+            .collect();
+        destinations.sort();
+        destinations.dedup();
 
-        for raw in links {
-            match classify_link(&raw) {
-                LinkClass::External => {
+        for raw in destinations {
+            let path = match classify_destination(&raw) {
+                DestinationShape::Web
+                | DestinationShape::OtherExternal
+                | DestinationShape::FragmentOnly
+                | DestinationShape::Unsupported => {
                     skipped_external.insert(raw);
+                    continue;
                 }
-                LinkClass::NonGuidance(resolved) => {
-                    skipped_external.insert(resolved);
-                }
-                LinkClass::AbsoluteSource(target) => {
+                DestinationShape::Absolute(target) => {
                     diagnostics.push(Diagnostic {
                         code: DiagnosticCode::AbsoluteSourcePath,
                         subject: id.to_string(),
@@ -172,99 +177,96 @@ pub fn compute_closure_fallible<S: FallibleContentSource + ?Sized>(
                         target,
                         status: EdgeStatus::Blocked,
                     });
+                    continue;
                 }
-                LinkClass::Guidance | LinkClass::Profile => {
-                    let resolved = resolve_relative(base_dir, &raw);
-                    let Some(target) = resolved else {
-                        diagnostics.push(Diagnostic {
-                            code: DiagnosticCode::PathTraversal,
-                            subject: id.to_string(),
-                            message: format!(
-                                "'{id}' links to '{raw}', which escapes the source root"
-                            ),
-                        });
-                        continue;
-                    };
-                    let kind = if target.ends_with(".toml") {
-                        EdgeKind::ProfileReference
-                    } else {
-                        EdgeKind::GuidanceReference
-                    };
+                DestinationShape::Local(path) => path,
+            };
+            let Some(target) = resolve_local(base_dir, &path) else {
+                diagnostics.push(Diagnostic {
+                    code: DiagnosticCode::PathTraversal,
+                    subject: id.to_string(),
+                    message: format!("'{id}' links to '{raw}', which escapes the source root"),
+                });
+                continue;
+            };
+            if !target.ends_with(".md") && !target.ends_with(".toml") {
+                skipped_external.insert(path);
+                continue;
+            }
+            let kind = if target.ends_with(".toml") {
+                EdgeKind::ProfileReference
+            } else {
+                EdgeKind::GuidanceReference
+            };
 
-                    match state.get(&target).copied() {
-                        Some(State::InProgress) => {
-                            diagnostics.push(Diagnostic {
-                                code: DiagnosticCode::Cycle,
-                                subject: target.clone(),
-                                message: format!(
-                                    "dependency cycle: '{id}' -> '{target}' closes a cycle"
-                                ),
-                            });
-                            edges.push(DependencyEdge {
-                                kind,
-                                source: id.to_string(),
-                                target,
-                                status: EdgeStatus::Blocked,
-                            });
-                        }
-                        Some(State::Done) => {
-                            edges.push(DependencyEdge {
-                                kind,
-                                source: id.to_string(),
-                                target,
-                                status: EdgeStatus::Resolved,
-                            });
-                        }
-                        None => {
-                            if source.escapes_root(&target)? {
-                                diagnostics.push(Diagnostic {
+            match state.get(&target).copied() {
+                Some(State::InProgress) => {
+                    diagnostics.push(Diagnostic {
+                        code: DiagnosticCode::Cycle,
+                        subject: target.clone(),
+                        message: format!("dependency cycle: '{id}' -> '{target}' closes a cycle"),
+                    });
+                    edges.push(DependencyEdge {
+                        kind,
+                        source: id.to_string(),
+                        target,
+                        status: EdgeStatus::Blocked,
+                    });
+                }
+                Some(State::Done) => {
+                    edges.push(DependencyEdge {
+                        kind,
+                        source: id.to_string(),
+                        target,
+                        status: EdgeStatus::Resolved,
+                    });
+                }
+                None => {
+                    if source.escapes_root(&target)? {
+                        diagnostics.push(Diagnostic {
                                     code: DiagnosticCode::SymlinkEscape,
                                     subject: target.clone(),
                                     message: format!(
                                         "'{id}' references '{target}', which resolves outside the source root"
                                     ),
                                 });
-                                edges.push(DependencyEdge {
-                                    kind,
-                                    source: id.to_string(),
-                                    target,
-                                    status: EdgeStatus::Blocked,
-                                });
-                                continue;
-                            }
-                            if !source.exists(&target)? {
-                                diagnostics.push(Diagnostic {
-                                    code: DiagnosticCode::MissingDependency,
-                                    subject: target.clone(),
-                                    message: format!(
-                                        "'{id}' references '{target}', which does not exist"
-                                    ),
-                                });
-                                edges.push(DependencyEdge {
-                                    kind,
-                                    source: id.to_string(),
-                                    target,
-                                    status: EdgeStatus::Missing,
-                                });
-                                continue;
-                            }
-                            edges.push(DependencyEdge {
-                                kind,
-                                source: id.to_string(),
-                                target: target.clone(),
-                                status: EdgeStatus::Resolved,
-                            });
-                            visit(
-                                &target,
-                                source,
-                                state,
-                                edges,
-                                diagnostics,
-                                skipped_external,
-                                artifacts,
-                            )?;
-                        }
+                        edges.push(DependencyEdge {
+                            kind,
+                            source: id.to_string(),
+                            target,
+                            status: EdgeStatus::Blocked,
+                        });
+                        continue;
                     }
+                    if !source.exists(&target)? {
+                        diagnostics.push(Diagnostic {
+                            code: DiagnosticCode::MissingDependency,
+                            subject: target.clone(),
+                            message: format!("'{id}' references '{target}', which does not exist"),
+                        });
+                        edges.push(DependencyEdge {
+                            kind,
+                            source: id.to_string(),
+                            target,
+                            status: EdgeStatus::Missing,
+                        });
+                        continue;
+                    }
+                    edges.push(DependencyEdge {
+                        kind,
+                        source: id.to_string(),
+                        target: target.clone(),
+                        status: EdgeStatus::Resolved,
+                    });
+                    visit(
+                        &target,
+                        source,
+                        state,
+                        edges,
+                        diagnostics,
+                        skipped_external,
+                        artifacts,
+                    )?;
                 }
             }
         }
@@ -318,54 +320,4 @@ pub fn compute_closure_fallible<S: FallibleContentSource + ?Sized>(
         diagnostics,
         skipped_external,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extract_links_finds_inline_targets() {
-        let text = "See [base](../instructions/base.md) and [ext](https://example.com).";
-        let links = extract_links(text);
-        assert_eq!(
-            links,
-            vec!["../instructions/base.md", "https://example.com"]
-        );
-    }
-
-    #[test]
-    fn extract_links_strips_titles() {
-        let text = r#"[a](foo.md "title text")"#;
-        assert_eq!(extract_links(text), vec!["foo.md"]);
-    }
-
-    #[test]
-    fn extract_links_ignores_code_blocks_and_spans() {
-        let text = "Real [a](a.md).\n\n```markdown\n| **Part** | [x](01-example.md) |\n```\n\nInline `[y](y.md)` and [b](b.md).\n";
-        assert_eq!(extract_links(text), vec!["a.md", "b.md"]);
-    }
-
-    #[test]
-    fn classify_link_detects_external_and_unsafe() {
-        assert!(matches!(
-            classify_link("https://example.com"),
-            LinkClass::External
-        ));
-        assert!(matches!(classify_link("#anchor"), LinkClass::External));
-        assert!(matches!(
-            classify_link("/etc/passwd"),
-            LinkClass::AbsoluteSource(_)
-        ));
-        assert!(matches!(
-            classify_link("../../etc/notes.md"),
-            LinkClass::Guidance
-        ));
-    }
-
-    #[test]
-    fn resolve_relative_rejects_escape_past_root() {
-        assert_eq!(resolve_relative("a", "../b.md"), Some("b.md".to_string()));
-        assert_eq!(resolve_relative("", "../b.md"), None);
-    }
 }

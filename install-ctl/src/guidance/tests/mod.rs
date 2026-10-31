@@ -18,6 +18,7 @@ mod fixtures;
 mod get;
 mod install;
 mod installer_script;
+mod link_closure;
 mod scopes;
 mod uninstall;
 

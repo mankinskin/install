@@ -15,13 +15,13 @@ use crate::guidance::{
         DestinationPaths, is_initialized_submodule, map_repo_scope_path, resolve_destination_root,
         split_at_agents_root,
     },
-    graph::{
-        ClosureResult, ContentSource, Diagnostic, DiagnosticCode, compute_closure, extract_links,
-        resolve_relative,
-    },
+    graph::{ClosureResult, ContentSource, Diagnostic, DiagnosticCode, compute_closure},
     profile::{CorpusItem, DestinationScopeKind, Profile, RecipeStep, load_profile},
-    rewrite::rewrite_link,
 };
+
+#[path = "plan/rewrites.rs"]
+mod rewrites;
+use rewrites::compute_rewrites;
 
 /// Origin of an artifact's bytes: an on-disk source file, or a recipe copy
 /// step whose bytes are read from another source-root file.
@@ -305,25 +305,8 @@ pub fn build_plan_with_profile(
         let mut rewrites = Vec::new();
         if id.ends_with(".md") {
             let read_id = recipe_from.get(id).cloned().unwrap_or_else(|| id.clone());
-            if let Some(text) = fs::read_to_string(inputs.source_root.join(&read_id)).ok() {
-                let base_dir = id.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-                let mut links = extract_links(&text);
-                links.sort();
-                links.dedup();
-                for raw in links {
-                    let Some(target_id) = resolve_relative(base_dir, &raw) else {
-                        continue;
-                    };
-                    let Some(target_final) = final_paths.get(&target_id) else {
-                        continue;
-                    };
-                    if let Some(new_link) = rewrite_link(&raw, &final_path, target_final) {
-                        rewrites.push(Rewrite {
-                            old_link: raw,
-                            new_link,
-                        });
-                    }
-                }
+            if let Ok(text) = fs::read_to_string(inputs.source_root.join(&read_id)) {
+                rewrites = compute_rewrites(id, &text, &final_path, &final_paths);
             }
         }
 
