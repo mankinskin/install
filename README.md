@@ -223,6 +223,15 @@ install-ctl guidance unlink    --repo <repo> --harness vscode --source NAME=PATH
   Unsupported sources fail explicitly; no full-clone fallback exists.
   System Git is still required for configuration, credentials, SSH and
   received-pack verification.
+  Connection, HTTP configuration, and handshake failures include their
+  underlying error causes, with source-URL passwords and credential-helper
+  secrets redacted. HTTPS uses bundled curl with Rust TLS, not system Git's
+  TLS backend. HTTPS defaults to the platform trust store, loaded into an
+  invocation-local CA bundle that is removed with the worker's temporary
+  files. `SSL_CERT_FILE`/`SSL_CERT_DIR` override platform discovery;
+  `GIT_SSL_CAINFO` or Git's `http.sslCAInfo` take precedence over that default.
+  Missing, empty, or unreadable default trust stores fail explicitly; do not
+  disable certificate verification.
   - The remote HEAD is resolved to an immutable commit on every call.
     Tree metadata is permitted, but unrelated file contents are not fetched.
     Explicit missing paths fail after metadata discovery, without guidance

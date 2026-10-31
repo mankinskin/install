@@ -8,11 +8,50 @@ use gix_transport::{
     },
 };
 use std::{
+    error::Error,
     fs,
     io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
 };
+
+fn diagnostic(
+    context: &str,
+    error: &dyn Error,
+    source: &str,
+    account: Option<&client::Account>,
+) -> String {
+    let mut message = format!("{context}: {error}");
+    let mut cause = error.source();
+    while let Some(error) = cause {
+        message.push_str(&format!(": {error}"));
+        cause = error.source();
+    }
+    if let Ok(mut url) = gix_url::parse(source) {
+        let password = url.password().map(str::to_owned);
+        url.set_user(None);
+        url.set_password(None);
+        message = message.replace(source, &url.to_bstring().to_string());
+        if let Some(password) = password.filter(|value| !value.is_empty()) {
+            message = message.replace(&password, "[REDACTED]");
+        }
+    } else {
+        message = message.replace(source, "[REDACTED SOURCE]");
+    }
+    if let Some(account) = account {
+        for secret in [
+            Some(account.password.as_str()),
+            account.oauth_refresh_token.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|secret| !secret.is_empty())
+        {
+            message = message.replace(secret, "[REDACTED]");
+        }
+    }
+    message
+}
 
 fn credentials(source: &str) -> Result<client::Account, String> {
     if source.contains(['\r', '\n']) {
@@ -163,12 +202,19 @@ pub(super) fn run(request: Request, directory: &Path) -> Result<Response, String
             trace: false,
         },
     )
-    .map_err(
-        |_| "selective transport: cannot connect; verify source URL and transport configuration",
-    )?;
+    .map_err(|error| diagnostic("selective transport: cannot connect", &error, &source, None))?;
+    let mut http_options = config::http(&source)?;
+    config::initialize_tls(&source, &mut http_options, directory)?;
     transport
-        .configure(&config::http(&source)?)
-        .map_err(|_| "selective transport: HTTP configuration failed")?;
+        .configure(&http_options)
+        .map_err(|error| {
+            diagnostic(
+                "selective transport: HTTP configuration failed",
+                &error,
+                &source,
+                None,
+            )
+        })?;
 
     let handshake = match transport.handshake(Service::UploadPack, &[]) {
         Ok(response) => {
@@ -180,31 +226,48 @@ pub(super) fn run(request: Request, directory: &Path) -> Result<Response, String
         Err(client::Error::Io(ref error))
             if error.kind() == std::io::ErrorKind::PermissionDenied =>
         {
-            Err(true)
+            Err(())
         }
-        Err(_) => Err(false),
+        Err(error) => {
+            return Err(diagnostic(
+                "selective transport handshake failed; verify repository access and server availability",
+                &error,
+                &source,
+                None,
+            ));
+        }
     };
     let capabilities = match handshake {
         Ok(capabilities) => capabilities,
-        Err(needs_authentication) => {
-            if !needs_authentication {
-                return Err("selective transport handshake failed; verify repository access and server availability".into());
-            }
+        Err(()) => {
             let account = credentials(&source)?;
-            transport.set_identity(account.clone()).map_err(
-                |_| "selective transport: server does not support configured authentication",
-            )?;
+            transport.set_identity(account.clone()).map_err(|error| {
+                diagnostic(
+                    "selective transport: server does not support configured authentication",
+                    &error,
+                    &source,
+                    Some(&account),
+                )
+            })?;
             let response = match transport.handshake(Service::UploadPack, &[]) {
                 Ok(response) => {
                     finish_credentials(&source, &account, "approve")?;
                     response
                 }
                 Err(error) => {
+                    let mut message = diagnostic(
+                        "selective transport: authentication failed; check the Git credential helper",
+                        &error,
+                        &source,
+                        Some(&account),
+                    );
                     if matches!(error, client::Error::Io(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied)
+                        && let Err(credential_error) =
+                            finish_credentials(&source, &account, "reject")
                     {
-                        finish_credentials(&source, &account, "reject")?;
+                        message.push_str(&format!("; additionally, {credential_error}"));
                     }
-                    return Err("selective transport: authentication failed; check the Git credential helper".into());
+                    return Err(message);
                 }
             };
             if response.actual_protocol != Protocol::V2 {
@@ -306,5 +369,63 @@ pub(super) fn run(request: Request, directory: &Path) -> Result<Response, String
             }
             Ok(Response::Objects(objects))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_preserves_tls_cause_hidden_by_transport_display() {
+        let cause = "failed to build client config: no server certificate verifier was configured on the client config builder";
+        let error = client::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            cause,
+        ));
+        let message = diagnostic(
+            "selective transport handshake failed",
+            &error,
+            "https://example.invalid/repo",
+            None,
+        );
+        assert!(message.contains(cause), "{message}");
+    }
+
+    #[test]
+    fn diagnostic_redacts_url_and_credential_helper_secrets() {
+        let source = "https://user:url-secret@example.invalid/repo";
+        let error = std::io::Error::other(format!(
+            "failed for {source}: url-secret helper-secret refresh-secret"
+        ));
+        let account = client::Account {
+            username: "user".into(),
+            password: "helper-secret".into(),
+            oauth_refresh_token: Some("refresh-secret".into()),
+        };
+        let message = diagnostic(
+            "selective transport handshake failed",
+            &error,
+            source,
+            Some(&account),
+        );
+        assert!(
+            message.contains("https://example.invalid/repo"),
+            "{message}"
+        );
+        for secret in ["url-secret", "helper-secret", "refresh-secret"] {
+            assert!(!message.contains(secret), "{message}");
+        }
+    }
+
+    #[test]
+    fn diagnostic_redacts_source_when_url_parsing_fails() {
+        let source = "https://user:url-secret@[invalid/repo";
+        let error = std::io::Error::other(format!("invalid URL: {source}"));
+        let message = diagnostic("selective transport: cannot connect", &error, source, None);
+        assert_eq!(
+            message,
+            "selective transport: cannot connect: invalid URL: [REDACTED SOURCE]"
+        );
     }
 }

@@ -2,6 +2,36 @@ use super::super::{Operation, ReceivedObject, Request, objects, process};
 use super::{Repository, SelectiveTransport, fs, http_server, http_server_mode};
 use std::time::{Duration, Instant};
 
+fn assert_handshake_error_is_visible(auth: bool) {
+    let repository = Repository::new(true);
+    let (_server, url, _log) = http_server(&repository, auth);
+    let url = url.replace("/repo.git", "/missing.git");
+    let config = repository.root.path().join("client.config");
+    let helper = format!(
+        "!{} credential {}",
+        install_ctl_test_support::command_path(&install_ctl_test_support::helper_path()),
+        install_ctl_test_support::command_path(&repository.root.path().join("credentials.jsonl"))
+    );
+    fs::write(&config, format!("[credential]\n\thelper = \"{helper}\"\n")).unwrap();
+    repository.probe(&url, Some(&config), None, false);
+    let result: serde_json::Value =
+        serde_json::from_slice(&fs::read(repository.root.path().join("objects.json")).unwrap())
+            .unwrap();
+    let error = result["error"].as_str().unwrap();
+    assert!(error.contains("404"), "HTTP cause was discarded: {error}");
+    assert!(!error.contains("fixture-password"), "{error}");
+}
+
+#[test]
+fn initial_handshake_error_preserves_http_status() {
+    assert_handshake_error_is_visible(false);
+}
+
+#[test]
+fn authenticated_handshake_error_preserves_http_status() {
+    assert_handshake_error_is_visible(true);
+}
+
 #[test]
 fn sha256_upload_pack_verifies_metadata_and_selected_blob() {
     let repository = Repository::with_format(true, "sha256");
