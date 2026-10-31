@@ -79,7 +79,7 @@ Create the initial pending census without claiming any classification:
 
 Generation refuses to overwrite a ledger. Subsequent runs use exact emitted
 `batch:<group>:<nnn>` selectors or the stage-specific aggregate selectors
-documented in [the inventory package](../../path-render-inventory/README.md).
+documented in [the inventory package](https://github.com/mankinskin/workflow-tools/blob/main/path-render-inventory/README.md).
 The ledger and earlier receipts are separate attested inputs, not image/source
 hash inputs. `-RunSelectedTests`, `-CheckLedger` and `-VerifyComplete` retain their
 distinct roles; complete gates fail on unresolved classification or stale owning
