@@ -223,6 +223,11 @@ install-ctl guidance unlink    --repo <repo> --harness vscode --source NAME=PATH
   Unsupported sources fail explicitly; no full-clone fallback exists.
   System Git is still required for configuration, credentials, SSH and
   received-pack verification.
+  Network exchanges run in an isolated, deadline-bound worker. When a server
+  requires authentication, the foreground `install-ctl` process runs
+  `git credential fill` once per remote, outside those deadlines, so helpers
+  and terminal prompts work normally. The credentials reach the worker only
+  through its stdin pipe and are approved or rejected through Git afterwards.
   Connection, HTTP configuration, and handshake failures include their
   underlying error causes, with source-URL passwords and credential-helper
   secrets redacted. HTTPS uses bundled curl with Rust TLS, not system Git's

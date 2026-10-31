@@ -1,18 +1,39 @@
-use super::{Request, Response, exchange};
+use super::{Credentials, Request, Response, exchange};
 use std::{
     fs,
+    io::{Read, Write},
     path::Path,
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
-pub(super) fn run(request: Request) -> Result<Response, String> {
-    run_with_limits(request, Duration::from_secs(30), Duration::from_secs(120))
+pub(super) fn run(
+    request: &Request,
+    credentials: Option<&Credentials>,
+) -> Result<Response, String> {
+    run_with_limits(
+        request,
+        credentials,
+        default_connect_limit(),
+        Duration::from_secs(120),
+    )
+}
+
+fn default_connect_limit() -> Duration {
+    #[cfg(test)]
+    if let Some(limit) = std::env::var("INSTALL_CTL_TEST_CONNECT_LIMIT_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+    {
+        return Duration::from_millis(limit);
+    }
+    Duration::from_secs(30)
 }
 
 pub(super) fn run_with_limits(
-    request: Request,
+    request: &Request,
+    credentials: Option<&Credentials>,
     connect_limit: Duration,
     interaction_limit: Duration,
 ) -> Result<Response, String> {
@@ -20,7 +41,7 @@ pub(super) fn run_with_limits(
         .map_err(|_| "selective transport: cannot allocate exchange directory")?;
     fs::write(
         directory.path().join("request.json"),
-        serde_json::to_vec(&request)
+        serde_json::to_vec(request)
             .map_err(|_| "selective transport: cannot encode object request")?,
     )
     .map_err(|_| "selective transport: cannot write object request")?;
@@ -38,7 +59,7 @@ pub(super) fn run_with_limits(
     }
     command
         .env("INSTALL_CTL_OBJECT_WORKER", directory.path())
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     #[cfg(unix)]
@@ -53,6 +74,17 @@ pub(super) fn run_with_limits(
         let _owner = ProcessOwner::new(&child)?;
         fs::write(directory.path().join("start"), [])
             .map_err(|_| "selective transport: cannot release isolated worker")?;
+        // Credentials travel only over the pipe, never through the exchange directory.
+        let mut input = child
+            .stdin
+            .take()
+            .ok_or("selective transport: missing worker input")?;
+        serde_json::to_writer(&mut input, &credentials)
+            .map_err(|_| "selective transport: cannot send worker credentials")?;
+        input
+            .flush()
+            .map_err(|_| "selective transport: cannot send worker credentials")?;
+        drop(input);
         let started = Instant::now();
         loop {
             match child.try_wait() {
@@ -108,13 +140,24 @@ pub(super) fn worker_entry() {
         }
         thread::sleep(Duration::from_millis(5));
     }
-    let result = fs::read(directory.join("request.json"))
-        .map_err(|_| "selective transport: cannot read worker request".to_owned())
-        .and_then(|bytes| {
-            serde_json::from_slice::<Request>(&bytes)
-                .map_err(|_| "selective transport: invalid worker request".to_owned())
-        })
-        .and_then(|request| exchange::run(request, directory));
+    let mut input = Vec::new();
+    let credentials = std::io::stdin()
+        .read_to_end(&mut input)
+        .map_err(|_| "selective transport: cannot read worker credentials".to_owned())
+        .and_then(|_| {
+            if input.is_empty() {
+                return Ok(None);
+            }
+            serde_json::from_slice::<Option<Credentials>>(&input)
+                .map_err(|_| "selective transport: invalid worker credentials".to_owned())
+        });
+    let result = credentials.and_then(|credentials| {
+        let request = fs::read(directory.join("request.json"))
+            .map_err(|_| "selective transport: cannot read worker request".to_owned())?;
+        let request = serde_json::from_slice::<Request>(&request)
+            .map_err(|_| "selective transport: invalid worker request".to_owned())?;
+        exchange::run(request, credentials, directory)
+    });
     let encoded = match serde_json::to_vec(&result) {
         Ok(encoded) => encoded,
         Err(_) => {

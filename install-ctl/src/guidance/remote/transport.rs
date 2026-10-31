@@ -1,6 +1,7 @@
 //! Selective Git object transfer, isolated so deadlines also cancel transport children.
 
 pub(super) mod config;
+mod credential;
 mod exchange;
 mod objects;
 mod process;
@@ -45,20 +46,34 @@ pub(super) enum Response {
     Head { oid: String, repository_key: String },
     Authorized { repository_key: String },
     Objects(Vec<ReceivedObject>),
+    AuthenticationRequired,
+    AuthenticationRejected(String),
+}
+
+/// Git credentials handed to the worker over stdin; deliberately not `Debug`.
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct Credentials {
+    username: String,
+    password: String,
 }
 
 pub struct SelectiveTransport {
     source: String,
     head: String,
     repository_key: String,
+    credentials: Option<Credentials>,
 }
 
 impl SelectiveTransport {
     pub fn connect(source: &str) -> Result<Self, String> {
-        match process::run(Request {
-            source: source.to_owned(),
-            operation: Operation::Head,
-        })? {
+        let mut credentials = None;
+        match credential::exchange(
+            Request {
+                source: source.to_owned(),
+                operation: Operation::Head,
+            },
+            &mut credentials,
+        )? {
             Response::Head {
                 oid: head,
                 repository_key,
@@ -66,6 +81,7 @@ impl SelectiveTransport {
                 source: source.to_owned(),
                 head,
                 repository_key,
+                credentials,
             }),
             _ => Err("selective transport: invalid HEAD response".into()),
         }
@@ -75,14 +91,19 @@ impl SelectiveTransport {
         let revision = gix_hash::ObjectId::from_hex(revision.as_bytes())
             .map_err(|_| "selective transport: invalid pinned revision")?
             .to_string();
-        match process::run(Request {
-            source: source.to_owned(),
-            operation: Operation::Authorize,
-        })? {
+        let mut credentials = None;
+        match credential::exchange(
+            Request {
+                source: source.to_owned(),
+                operation: Operation::Authorize,
+            },
+            &mut credentials,
+        )? {
             Response::Authorized { repository_key } => Ok(Self {
                 source: source.to_owned(),
                 head: revision,
                 repository_key,
+                credentials,
             }),
             _ => Err("selective transport: invalid authorization response".into()),
         }
@@ -110,11 +131,14 @@ impl SelectiveTransport {
             .ok_or_else(|| "selective transport: missing selected blob".into())
     }
 
-    fn fetch(&self, operation: Operation) -> Result<Vec<ReceivedObject>, String> {
-        match process::run(Request {
-            source: self.source.clone(),
-            operation,
-        })? {
+    fn fetch(&mut self, operation: Operation) -> Result<Vec<ReceivedObject>, String> {
+        match credential::exchange(
+            Request {
+                source: self.source.clone(),
+                operation,
+            },
+            &mut self.credentials,
+        )? {
             Response::Objects(objects) => Ok(objects),
             _ => Err("selective transport: invalid object response".into()),
         }

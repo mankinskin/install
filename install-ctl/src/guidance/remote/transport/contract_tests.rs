@@ -79,10 +79,11 @@ fn handshake_timeout_cancels_the_owned_worker() {
     let (_server, url, log) = http_server_mode(&repository, "stall-handshake");
     let started = Instant::now();
     let error = process::run_with_limits(
-        Request {
+        &Request {
             source: url,
             operation: Operation::Head,
         },
+        None,
         Duration::from_secs(1),
         Duration::from_secs(5),
     )
@@ -103,10 +104,11 @@ fn fetch_timeout_cancels_the_owned_worker() {
     let (_server, url, log) = http_server_mode(&repository, "stall-fetch");
     let started = Instant::now();
     let error = process::run_with_limits(
-        Request {
+        &Request {
             source: url,
             operation: Operation::Metadata(repository.head.clone()),
         },
+        None,
         Duration::from_secs(5),
         Duration::from_secs(1),
     )

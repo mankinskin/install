@@ -1,4 +1,4 @@
-use super::{Operation, Request, Response, config, objects};
+use super::{Credentials, Operation, Request, Response, config, objects};
 use gix_protocol::fetch::{Arguments, Response as FetchResponse};
 use gix_transport::{
     Protocol, Service,
@@ -7,13 +7,7 @@ use gix_transport::{
         blocking_io::{Transport, TransportV2Ext},
     },
 };
-use std::{
-    error::Error,
-    fs,
-    io::{Read, Write},
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{error::Error, fs, io::Read, path::Path, process::Command};
 
 fn diagnostic(
     context: &str,
@@ -51,85 +45,6 @@ fn diagnostic(
         }
     }
     message
-}
-
-fn credentials(source: &str) -> Result<client::Account, String> {
-    if source.contains(['\r', '\n']) {
-        return Err("selective transport: invalid source URL".into());
-    }
-    let mut child = Command::new("git")
-        .args(["credential", "fill"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| "selective transport: cannot start Git credential helper")?;
-    write!(
-        child
-            .stdin
-            .take()
-            .ok_or("selective transport: missing credential input")?,
-        "url={source}\n\n"
-    )
-    .map_err(|_| "selective transport: credential helper input failed")?;
-    let output = child
-        .wait_with_output()
-        .map_err(|_| "selective transport: credential helper failed")?;
-    if !output.status.success() {
-        return Err(
-            "selective transport: authentication required; configure a Git credential helper"
-                .into(),
-        );
-    }
-    let mut username = None;
-    let mut password = None;
-    let text = std::str::from_utf8(&output.stdout)
-        .map_err(|_| "selective transport: credential helper returned invalid text")?;
-    for line in text.lines() {
-        if let Some(value) = line.strip_prefix("username=") {
-            username = Some(value.to_owned());
-        }
-        if let Some(value) = line.strip_prefix("password=") {
-            password = Some(value.to_owned());
-        }
-    }
-    Ok(client::Account {
-        username: username
-            .ok_or("selective transport: credential helper did not provide a username")?,
-        password: password
-            .ok_or("selective transport: credential helper did not provide a password")?,
-        oauth_refresh_token: None,
-    })
-}
-
-fn finish_credentials(source: &str, account: &client::Account, action: &str) -> Result<(), String> {
-    let mut child = Command::new("git")
-        .args(["credential", action])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| "selective transport: cannot update Git credential helper")?;
-    write!(
-        child
-            .stdin
-            .take()
-            .ok_or("selective transport: missing credential helper input")?,
-        "url={source}\nusername={}\npassword={}\n\n",
-        account.username,
-        account.password
-    )
-    .map_err(|_| "selective transport: cannot send credential helper outcome")?;
-    let status = child
-        .wait()
-        .map_err(|_| "selective transport: credential helper did not terminate")?;
-    if !status.success() {
-        return Err(
-            "selective transport: Git credential helper could not record authentication outcome"
-                .into(),
-        );
-    }
-    Ok(())
 }
 
 fn ssh_options() -> Result<client::blocking_io::ssh::connect::Options, String> {
@@ -192,7 +107,11 @@ fn ssh_options() -> Result<client::blocking_io::ssh::connect::Options, String> {
     })
 }
 
-pub(super) fn run(request: Request, directory: &Path) -> Result<Response, String> {
+pub(super) fn run(
+    request: Request,
+    credentials: Option<Credentials>,
+    directory: &Path,
+) -> Result<Response, String> {
     let source = config::source(&request.source)?;
     let mut transport = client::blocking_io::connect::connect(
         source.as_str(),
@@ -205,75 +124,61 @@ pub(super) fn run(request: Request, directory: &Path) -> Result<Response, String
     .map_err(|error| diagnostic("selective transport: cannot connect", &error, &source, None))?;
     let mut http_options = config::http(&source)?;
     config::initialize_tls(&source, &mut http_options, directory)?;
-    transport
-        .configure(&http_options)
-        .map_err(|error| {
+    transport.configure(&http_options).map_err(|error| {
+        diagnostic(
+            "selective transport: HTTP configuration failed",
+            &error,
+            &source,
+            None,
+        )
+    })?;
+
+    let account = credentials.map(|credentials| client::Account {
+        username: credentials.username,
+        password: credentials.password,
+        oauth_refresh_token: None,
+    });
+    if let Some(account) = &account {
+        transport.set_identity(account.clone()).map_err(|error| {
             diagnostic(
-                "selective transport: HTTP configuration failed",
+                "selective transport: server does not support configured authentication",
                 &error,
                 &source,
-                None,
+                Some(account),
             )
         })?;
-
-    let handshake = match transport.handshake(Service::UploadPack, &[]) {
+    }
+    let capabilities = match transport.handshake(Service::UploadPack, &[]) {
         Ok(response) => {
             if response.actual_protocol != Protocol::V2 {
                 return Err("selective transport requires protocol v2 with fetch filtering".into());
             }
-            Ok(response.capabilities)
-        }
-        Err(client::Error::Io(ref error))
-            if error.kind() == std::io::ErrorKind::PermissionDenied =>
-        {
-            Err(())
+            response.capabilities
         }
         Err(error) => {
-            return Err(diagnostic(
-                "selective transport handshake failed; verify repository access and server availability",
-                &error,
-                &source,
-                None,
-            ));
-        }
-    };
-    let capabilities = match handshake {
-        Ok(capabilities) => capabilities,
-        Err(()) => {
-            let account = credentials(&source)?;
-            transport.set_identity(account.clone()).map_err(|error| {
-                diagnostic(
-                    "selective transport: server does not support configured authentication",
+            let denied = matches!(error, client::Error::Io(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied);
+            let Some(account) = &account else {
+                if denied {
+                    return Ok(Response::AuthenticationRequired);
+                }
+                return Err(diagnostic(
+                    "selective transport handshake failed; verify repository access and server availability",
                     &error,
                     &source,
-                    Some(&account),
-                )
-            })?;
-            let response = match transport.handshake(Service::UploadPack, &[]) {
-                Ok(response) => {
-                    finish_credentials(&source, &account, "approve")?;
-                    response
-                }
-                Err(error) => {
-                    let mut message = diagnostic(
-                        "selective transport: authentication failed; check the Git credential helper",
-                        &error,
-                        &source,
-                        Some(&account),
-                    );
-                    if matches!(error, client::Error::Io(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied)
-                        && let Err(credential_error) =
-                            finish_credentials(&source, &account, "reject")
-                    {
-                        message.push_str(&format!("; additionally, {credential_error}"));
-                    }
-                    return Err(message);
-                }
+                    None,
+                ));
             };
-            if response.actual_protocol != Protocol::V2 {
-                return Err("selective transport requires protocol v2 with fetch filtering".into());
-            }
-            response.capabilities
+            let message = diagnostic(
+                "selective transport: authentication failed; check the Git credential helper",
+                &error,
+                &source,
+                Some(account),
+            );
+            return if denied {
+                Ok(Response::AuthenticationRejected(message))
+            } else {
+                Err(message)
+            };
         }
     };
     if capabilities

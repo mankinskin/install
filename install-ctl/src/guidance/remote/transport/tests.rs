@@ -83,6 +83,17 @@ impl Repository {
     }
 
     fn probe(&self, url: &str, config: Option<&Path>, ssh: Option<&str>, success: bool) {
+        self.probe_with_env(url, config, ssh, success, &[]);
+    }
+
+    fn probe_with_env(
+        &self,
+        url: &str,
+        config: Option<&Path>,
+        ssh: Option<&str>,
+        success: bool,
+        env: &[(&str, &str)],
+    ) {
         let result = self.root.path().join("objects.json");
         let mut command = Command::new(std::env::current_exe().unwrap());
         command.args([
@@ -108,6 +119,7 @@ impl Repository {
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| self.root.path().join("absent.config")),
             );
+        command.envs(env.iter().copied());
         if let Some(ssh) = ssh {
             command
                 .env("GIT_SSH_COMMAND", ssh)
@@ -329,6 +341,30 @@ fn smart_http_uses_credential_helper_without_logging_credentials() {
     assert!(actions.contains("\"action\": \"get\""));
     assert!(actions.contains("\"action\": \"store\""));
     assert!(!actions.contains("fixture-password"));
+}
+
+#[cfg(unix)]
+#[test]
+fn interactive_credential_fill_runs_outside_worker_deadline_and_once_per_remote() {
+    let repository = Repository::new(true);
+    let (_server, url, _log) = http_server(&repository, true);
+    let config = repository.root.path().join("client.config");
+    // Stands in for a user typing at a terminal prompt for longer than the connect limit.
+    let helper = format!(
+        "!sleep 2 && {} credential {}",
+        install_ctl_test_support::command_path(&install_ctl_test_support::helper_path()),
+        install_ctl_test_support::command_path(&repository.root.path().join("credentials.jsonl"))
+    );
+    fs::write(&config, format!("[credential]\n\thelper = \"{helper}\"\n")).unwrap();
+    repository.probe_with_env(
+        &url,
+        Some(&config),
+        None,
+        true,
+        &[("INSTALL_CTL_TEST_CONNECT_LIMIT_MS", "1000")],
+    );
+    let actions = fs::read_to_string(repository.root.path().join("credentials.jsonl")).unwrap();
+    assert_eq!(actions.matches("\"action\": \"get\"").count(), 1, "{actions}");
 }
 
 #[test]
