@@ -179,6 +179,42 @@ the command line.
 
 ## `guidance` command family
 
+### Mission-native route corpus
+
+The W7 repo-scope profile
+`mission/crates/mission/tests/fixtures/mission-native-guidance.toml` selects
+direct item `mission-native-route`: the parent refine/execute-ingest and
+execute-roadmap prompts plus the product ingestion/authoring/execution
+instructions. Resolve `--source` to the **meta-workspace source root**, not
+the product checkout. Use the actual profile path under that checkout:
+
+```text
+install-ctl guidance plan --source <meta-root> --profile <meta-root>/workflow-tools/mission/crates/mission/tests/fixtures/mission-native-guidance.toml --select mission-native-route --target <consumer-root> --json
+install-ctl guidance install --source <meta-root> --profile <meta-root>/workflow-tools/mission/crates/mission/tests/fixtures/mission-native-guidance.toml --select mission-native-route --target <consumer-root> --json
+```
+
+Review a nonblocking plan before installation. Repo scope places product
+instructions in an initialized owning submodule when present, otherwise at
+the consumer's canonical `.agents/` root, rewriting links over the required
+transitive closure. Installed bodies are runtime destinations, not committed
+generated `.github` copies, `COMMANDS.md` bodies or a rule-target registry.
+Existing `.claude/commands` aliases continue to reference `.agents/prompts`;
+installation does not invent or replace aliases.
+
+This installs **guidance**, not Mission MCP binaries or requester authority.
+Native new-run entry requires fresh initialized `tools/list` discovery of all
+19 original W6 tools plus the additive `mission_plan_record_review` tool,
+each with the `mission.native-planning` version-1 contract, and the configured
+`UserPromptSubmit` ingress for captured exact decisions. Cold and distinct
+formal review records must be persisted for the same current plan revision
+before a requester challenge is prepared; review records do not mint requester
+authority. Missing capability or receipt authority stops visibly, with no
+silent classic fallback. Existing classic dossiers and active routes remain
+unchanged; explicit migration is separate. G7 builds the separate install-ctl
+manifest, proves native MCP review-to-challenge readiness and exercises only
+disposable repo-scope targets in both layouts; it does not install production
+guidance or simulate a real requester receipt.
+
 ```bash
 install-ctl guidance plan      --source <repo> --profile <profile.toml> --select <id>... --target <repo> [--destination-scope repo|user|system|explicit] [--destination-path <path>] [--json]
 install-ctl guidance install   --source <repo> --profile <profile.toml> --select <id>... --target <repo> [--destination-scope ...] [--destination-path ...] [--json]
